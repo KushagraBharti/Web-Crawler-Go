@@ -10,6 +10,8 @@ A fast web crawler in Go with a live dashboard that shows you exactly what's hap
 
 Also: perfect excuse to learn Go deeply.
 
+![High Level System Design](Web-Crawler-Go_Basic_System_Ideation.jpeg)
+
 ## Why This Is Interesting
 
 High-performance crawling can be hard. Here's what I think will be hard:
