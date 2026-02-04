@@ -83,6 +83,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "seed_url required"})
 		return
 	}
+	if _, _, err := crawler.Canonicalize(req.SeedURL); err != nil {
+		util.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid seed_url"})
+		return
+	}
 	cfg := crawler.RunConfig{
 		SeedURL:            req.SeedURL,
 		MaxDepth:           req.MaxDepth,

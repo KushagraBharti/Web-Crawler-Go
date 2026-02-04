@@ -29,6 +29,21 @@ func (c RunConfig) Normalize() RunConfig {
 	if c.TimeBudget == 0 && c.TimeBudgetSeconds > 0 {
 		c.TimeBudget = time.Duration(c.TimeBudgetSeconds) * time.Second
 	}
+	if c.MaxDepth < 0 {
+		c.MaxDepth = 0
+	}
+	if c.MaxPages < 0 {
+		c.MaxPages = 0
+	}
+	if c.MaxLinksPerPage < 0 {
+		c.MaxLinksPerPage = 0
+	}
+	if c.GlobalConcurrency < 0 {
+		c.GlobalConcurrency = 0
+	}
+	if c.PerHostConcurrency < 0 {
+		c.PerHostConcurrency = 0
+	}
 	return c
 }
 

@@ -14,6 +14,7 @@ This file captures defaults made during long-run autonomous work.
 - Redirect depth: redirects re-enqueue at the same depth (do not increase depth)
 - Queue sizing: frontier = global concurrency * 200, fetch/parse = global concurrency * 4
 - Max body bytes default: 1 MiB
+- Personality cards: derived from host error rate, p95 latency, and inflight (client-side)
 
 ## Open to Change
 - Choice of chart library.

@@ -31,6 +31,18 @@ cd backend
 go run ./cmd/server
 ```
 
+Optional: run without Postgres (in-memory only):
+```bash
+set DISABLE_DB=true
+go run ./cmd/server
+```
+
+PowerShell syntax:
+```powershell
+$env:DISABLE_DB="true"
+go run ./cmd/server
+```
+
 Frontend (Bun):
 ```bash
 cd frontend

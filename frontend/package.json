@@ -4,20 +4,25 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "next dev -p 3000",
-    "build": "next build",
-    "start": "next start -p 3000",
+    "dev": "node node_modules/next/dist/bin/next dev -p 3000",
+    "build": "node node_modules/next/dist/bin/next build",
+    "start": "node node_modules/next/dist/bin/next start -p 3000",
     "lint": "next lint"
   },
   "dependencies": {
-    "next": "14.2.3",
+    "@swc/helpers": "^0.5.18",
+    "graceful-fs": "file:./vendor/graceful-fs",
+    "next": "16.1.6",
     "react": "18.2.0",
     "react-dom": "18.2.0",
+    "styled-jsx": "5.1.1",
     "zustand": "4.5.2"
   },
   "devDependencies": {
-    "eslint": "8.57.0",
-    "eslint-config-next": "14.2.3",
+    "@types/node": "20.11.30",
+    "@types/react": "18.2.66",
+    "eslint": "9.39.2",
+    "eslint-config-next": "16.1.6",
     "typescript": "5.4.5"
   }
 }

@@ -7,22 +7,32 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"webcrawler/internal/crawler"
 )
 
-type Store struct {
+type Store interface {
+	Migrate(ctx context.Context) error
+	CreateRun(ctx context.Context, cfg RunConfig) (uuid.UUID, error)
+	UpdateRunStatus(ctx context.Context, id uuid.UUID, status string, startedAt, stoppedAt *time.Time) error
+	GetRun(ctx context.Context, id uuid.UUID) (RunRow, error)
+	InsertPage(ctx context.Context, rec PageRecord) error
+	InsertError(ctx context.Context, runID uuid.UUID, host, url, class, message string) error
+	UpsertEdge(ctx context.Context, runID uuid.UUID, src, dst string, count int) error
+	UpsertHostStat(ctx context.Context, runID uuid.UUID, host string, bucket time.Time, req, errCount, p50, p95 int, bytes int64, reuse float64) error
+}
+
+type SQLStore struct {
 	db *sql.DB
 }
 
-func New(db *sql.DB) *Store {
-	return &Store{db: db}
+func NewSQL(db *sql.DB) *SQLStore {
+	return &SQLStore{db: db}
 }
 
-func (s *Store) DB() *sql.DB {
+func (s *SQLStore) DB() *sql.DB {
 	return s.db
 }
 
-func (s *Store) Migrate(ctx context.Context) error {
+func (s *SQLStore) Migrate(ctx context.Context) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS runs (
 			id uuid PRIMARY KEY,
@@ -109,17 +119,29 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) CreateRun(ctx context.Context, cfg crawler.RunConfig) (uuid.UUID, error) {
+type RunConfig struct {
+	SeedURL            string
+	MaxDepth           int
+	MaxPages           int
+	TimeBudgetSeconds  int
+	MaxLinksPerPage    int
+	GlobalConcurrency  int
+	PerHostConcurrency int
+	UserAgent          string
+	RespectRobots      bool
+}
+
+func (s *SQLStore) CreateRun(ctx context.Context, cfg RunConfig) (uuid.UUID, error) {
 	id := uuid.New()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO runs (id, seed_url, status, created_at, max_depth, max_pages, time_budget_seconds, max_links_per_page, global_concurrency, per_host_concurrency, user_agent, respect_robots)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-		id, cfg.SeedURL, "created", time.Now(), cfg.MaxDepth, cfg.MaxPages, int(cfg.TimeBudget.Seconds()), cfg.MaxLinksPerPage, cfg.GlobalConcurrency, cfg.PerHostConcurrency, cfg.UserAgent, cfg.RespectRobots,
+		id, cfg.SeedURL, "created", time.Now(), cfg.MaxDepth, cfg.MaxPages, cfg.TimeBudgetSeconds, cfg.MaxLinksPerPage, cfg.GlobalConcurrency, cfg.PerHostConcurrency, cfg.UserAgent, cfg.RespectRobots,
 	)
 	return id, err
 }
 
-func (s *Store) UpdateRunStatus(ctx context.Context, id uuid.UUID, status string, startedAt, stoppedAt *time.Time) error {
+func (s *SQLStore) UpdateRunStatus(ctx context.Context, id uuid.UUID, status string, startedAt, stoppedAt *time.Time) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status=$1, started_at=COALESCE($2, started_at), stopped_at=COALESCE($3, stopped_at) WHERE id=$4`, status, startedAt, stoppedAt, id)
 	return err
 }
@@ -141,7 +163,7 @@ type RunRow struct {
 	RespectRobots      bool
 }
 
-func (s *Store) GetRun(ctx context.Context, id uuid.UUID) (RunRow, error) {
+func (s *SQLStore) GetRun(ctx context.Context, id uuid.UUID) (RunRow, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, seed_url, status, created_at, started_at, stopped_at, max_depth, max_pages, time_budget_seconds, max_links_per_page, global_concurrency, per_host_concurrency, user_agent, respect_robots FROM runs WHERE id=$1`, id)
 	var rr RunRow
 	err := row.Scan(&rr.ID, &rr.SeedURL, &rr.Status, &rr.CreatedAt, &rr.StartedAt, &rr.StoppedAt, &rr.MaxDepth, &rr.MaxPages, &rr.TimeBudgetSeconds, &rr.MaxLinksPerPage, &rr.GlobalConcurrency, &rr.PerHostConcurrency, &rr.UserAgent, &rr.RespectRobots)
@@ -164,7 +186,7 @@ type PageRecord struct {
 	FetchedAt    *time.Time
 }
 
-func (s *Store) InsertPage(ctx context.Context, rec PageRecord) error {
+func (s *SQLStore) InsertPage(ctx context.Context, rec PageRecord) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO pages (run_id, url, canonical_url, host, depth, status_code, content_type, fetch_ms, size_bytes, error_class, error_message, discovered_at, fetched_at)
 	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		rec.RunID, rec.URL, rec.CanonicalURL, rec.Host, rec.Depth, nullableInt(rec.StatusCode), nullableString(rec.ContentType), nullableInt(int(rec.FetchMS)), nullableInt64(rec.SizeBytes), nullableString(rec.ErrClass), nullableString(rec.ErrMessage), rec.DiscoveredAt, rec.FetchedAt,
@@ -172,18 +194,18 @@ func (s *Store) InsertPage(ctx context.Context, rec PageRecord) error {
 	return err
 }
 
-func (s *Store) InsertError(ctx context.Context, runID uuid.UUID, host, url, class, message string) error {
+func (s *SQLStore) InsertError(ctx context.Context, runID uuid.UUID, host, url, class, message string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO errors (run_id, host, url, class, message, at) VALUES ($1,$2,$3,$4,$5,$6)`, runID, nullableString(host), nullableString(url), class, nullableString(message), time.Now())
 	return err
 }
 
-func (s *Store) UpsertEdge(ctx context.Context, runID uuid.UUID, src, dst string, count int) error {
+func (s *SQLStore) UpsertEdge(ctx context.Context, runID uuid.UUID, src, dst string, count int) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO edges (run_id, src_host, dst_host, count) VALUES ($1,$2,$3,$4)
 	ON CONFLICT (run_id, src_host, dst_host) DO UPDATE SET count = edges.count + EXCLUDED.count`, runID, src, dst, count)
 	return err
 }
 
-func (s *Store) UpsertHostStat(ctx context.Context, runID uuid.UUID, host string, bucket time.Time, req, errCount, p50, p95 int, bytes int64, reuse float64) error {
+func (s *SQLStore) UpsertHostStat(ctx context.Context, runID uuid.UUID, host string, bucket time.Time, req, errCount, p50, p95 int, bytes int64, reuse float64) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO host_stats (run_id, host, bucket_start, req_count, err_count, p50_ms, p95_ms, bytes, reuse_rate)
 	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 	ON CONFLICT (run_id, host, bucket_start) DO UPDATE SET req_count=$4, err_count=$5, p50_ms=$6, p95_ms=$7, bytes=$8, reuse_rate=$9`,

@@ -32,6 +32,8 @@ type Config struct {
 	Port          int
 	DatabaseURL   string
 	AllowedOrigin string
+	DisableDB     bool
+	AllowDBFallback bool
 	Defaults      CrawlerDefaults
 }
 
@@ -40,6 +42,8 @@ func Load() Config {
 		Port:          getInt("PORT", 8080),
 		DatabaseURL:   getString("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/crawler?sslmode=disable"),
 		AllowedOrigin: getString("ALLOWED_ORIGIN", "*"),
+		DisableDB:     getBool("DISABLE_DB", false),
+		AllowDBFallback: getBool("ALLOW_DB_FALLBACK", true),
 		Defaults: CrawlerDefaults{
 			MaxDepth:            getInt("DEFAULT_MAX_DEPTH", 3),
 			MaxPages:            getInt("DEFAULT_MAX_PAGES", 5000),

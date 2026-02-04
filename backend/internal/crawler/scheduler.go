@@ -68,6 +68,9 @@ func (s *Scheduler) enqueue(task *Task) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.frontierLimit > 0 && s.frontierSz >= s.frontierLimit {
+		return
+	}
 	s.frontierSz++
 	queue := s.hostQueues[task.Host]
 	if len(queue) == 0 {
