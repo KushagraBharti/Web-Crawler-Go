@@ -11,6 +11,7 @@ func TestCanonicalize(t *testing.T) {
 		{"https://example.com:443/path#frag", "https://example.com/path"},
 		{"http://example.com:80/a/../b", "http://example.com/b"},
 		{"example.com/test", "http://example.com/test"},
+		{"//example.com/rel", "http://example.com/rel"},
 		{"https://example.com/search?q=beta&b=1&a=2", "https://example.com/search?a=2&b=1&q=beta"},
 	}
 	for _, c := range cases {

@@ -302,6 +302,46 @@ a {
   padding-bottom: 4px;
 }
 
+.personality-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.personality-card {
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(27, 24, 18, 0.08);
+  display: grid;
+  gap: 10px;
+}
+
+.personality-card h3 {
+  font-family: var(--font-display), serif;
+  margin: 0;
+  font-size: 20px;
+}
+
+.personality-label {
+  align-self: flex-start;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+.personality-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .panel::after {
   content: '';
   position: absolute;
@@ -355,6 +395,9 @@ a {
     grid-template-columns: 1fr;
   }
   .queue-grid {
+    grid-template-columns: 1fr;
+  }
+  .personality-grid {
     grid-template-columns: 1fr;
   }
   .table-row {

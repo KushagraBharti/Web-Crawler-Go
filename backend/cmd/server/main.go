@@ -20,18 +20,35 @@ import (
 
 func main() {
 	cfg := config.Load()
-
-	db, err := sql.Open("pgx", cfg.DatabaseURL)
-	if err != nil {
-		log.Fatalf("db open: %v", err)
-	}
-	defer db.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	store := storage.New(db)
-	if err := store.Migrate(ctx); err != nil {
-		log.Fatalf("migrate: %v", err)
+	var store storage.Store
+	if cfg.DisableDB || cfg.DatabaseURL == "" {
+		store = storage.NewMemory()
+		log.Printf("running in memory-only mode (no database)")
+	} else {
+		db, err := sql.Open("pgx", cfg.DatabaseURL)
+		if err != nil {
+			if cfg.AllowDBFallback {
+				log.Printf("db open failed (%v); falling back to memory store", err)
+				store = storage.NewMemory()
+			} else {
+				log.Fatalf("db open: %v", err)
+			}
+		} else {
+			defer db.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			sqlStore := storage.NewSQL(db)
+			if err := sqlStore.Migrate(ctx); err != nil {
+				if cfg.AllowDBFallback {
+					log.Printf("migrate failed (%v); falling back to memory store", err)
+					store = storage.NewMemory()
+				} else {
+					log.Fatalf("migrate: %v", err)
+				}
+			} else {
+				store = sqlStore
+			}
+		}
 	}
 
 	runManager := api.NewRunManager(store, cfg.Defaults)

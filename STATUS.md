@@ -1,11 +1,11 @@
 # Status
 
 ## Current Phase
-- Phase 1 MVP complete (backend + frontend + infra skeleton)
+- Phase 2 reliability + observability complete
 
 ## Last Checkpoint
 - Backend crawler engine, API, metrics, and storage wired
-- Next.js UI with live SSE dashboard and run creation
+- Next.js UI with live SSE dashboard, personality cards, and run creation
 - Docker Compose + Dockerfiles
 
 ## Blockers

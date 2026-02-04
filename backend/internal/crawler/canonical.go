@@ -11,9 +11,20 @@ import (
 var ErrUnsupportedScheme = errors.New("unsupported scheme")
 
 func Canonicalize(raw string) (string, *url.URL, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
+	clean := strings.TrimSpace(raw)
+	parsed, err := url.Parse(clean)
 	if err != nil {
 		return "", nil, err
+	}
+	if parsed.Scheme == "" && parsed.Host == "" {
+		prefix := "http://"
+		if strings.HasPrefix(clean, "//") {
+			prefix = "http:"
+		}
+		parsed, err = url.Parse(prefix + clean)
+		if err != nil {
+			return "", nil, err
+		}
 	}
 	if parsed.Scheme == "" {
 		parsed.Scheme = "http"

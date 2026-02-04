@@ -1,0 +1,6 @@
+{
+  "name": "graceful-fs",
+  "version": "4.2.11",
+  "main": "index.js",
+  "license": "MIT"
+}

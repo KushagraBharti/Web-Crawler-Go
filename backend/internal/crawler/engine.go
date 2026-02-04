@@ -26,7 +26,7 @@ import (
 type Engine struct {
 	runID     uuid.UUID
 	cfg       RunConfig
-	store     *storage.Store
+	store     storage.Store
 	telemetry *metrics.Telemetry
 
 	ctx    context.Context
@@ -65,7 +65,7 @@ type edgeRecord struct {
 	count int
 }
 
-func NewEngine(runID uuid.UUID, cfg RunConfig, store *storage.Store, telemetry *metrics.Telemetry) *Engine {
+func NewEngine(runID uuid.UUID, cfg RunConfig, store storage.Store, telemetry *metrics.Telemetry) *Engine {
 	cfg = cfg.Normalize()
 	if cfg.GlobalConcurrency <= 0 {
 		cfg.GlobalConcurrency = 32
@@ -297,25 +297,34 @@ func (e *Engine) handleFetch(task *Task) {
 
 	if status >= 300 && status < 400 {
 		location := resp.Header.Get("Location")
+		size, _ := drainBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
 		e.handleRedirect(task, location)
-		e.recordFetch(task, status, contentType, nil, latency, 0, reusedConn, "", "")
+		e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, "", "")
 		return
 	}
 
 	if status == http.StatusTooManyRequests {
 		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+		size, _ := drainBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
 		if e.shouldRetry(task, ErrStatus, retryAfter) {
 			return
 		}
-		e.recordFetch(task, status, contentType, nil, latency, 0, reusedConn, ErrStatus, "too_many_requests")
+		e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, ErrStatus, "too_many_requests")
 		return
 	}
 
 	if status >= 500 {
+		size, _ := drainBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
 		if e.shouldRetry(task, ErrStatus, 0) {
 			return
 		}
-		e.recordFetch(task, status, contentType, nil, latency, 0, reusedConn, ErrStatus, resp.Status)
+		e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, ErrStatus, resp.Status)
+		return
+	}
+
+	if status >= 400 {
+		size, _ := drainBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
+		e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, ErrStatus, resp.Status)
 		return
 	}
 
@@ -496,9 +505,12 @@ func (e *Engine) handleParse(res *FetchResult) {
 				key, val, more := tok.TagAttr()
 				if string(key) == "href" {
 					link := strings.TrimSpace(string(val))
-					if link != "" {
-						parsedLink, err := url.Parse(link)
-						if err == nil {
+						if link != "" {
+							if strings.HasPrefix(link, "//") {
+								link = baseURL.Scheme + ":" + link
+							}
+							parsedLink, err := url.Parse(link)
+							if err == nil {
 							resolved := baseURL.ResolveReference(parsedLink)
 							canonical, parsed, err := Canonicalize(resolved.String())
 							if err == nil && !e.deduper.Seen(canonical) {

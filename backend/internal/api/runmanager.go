@@ -25,13 +25,13 @@ type RunState struct {
 }
 
 type RunManager struct {
-	store    *storage.Store
+	store    storage.Store
 	defaults config.CrawlerDefaults
 	mu       sync.Mutex
 	runs     map[uuid.UUID]*RunState
 }
 
-func NewRunManager(store *storage.Store, defaults config.CrawlerDefaults) *RunManager {
+func NewRunManager(store storage.Store, defaults config.CrawlerDefaults) *RunManager {
 	return &RunManager{
 		store:    store,
 		defaults: defaults,
@@ -42,7 +42,17 @@ func NewRunManager(store *storage.Store, defaults config.CrawlerDefaults) *RunMa
 func (rm *RunManager) CreateRun(ctx context.Context, cfg crawler.RunConfig) (uuid.UUID, error) {
 	cfg = rm.applyDefaults(cfg)
 	cfg = cfg.Normalize()
-	id, err := rm.store.CreateRun(ctx, cfg)
+	id, err := rm.store.CreateRun(ctx, storage.RunConfig{
+		SeedURL:            cfg.SeedURL,
+		MaxDepth:           cfg.MaxDepth,
+		MaxPages:           cfg.MaxPages,
+		TimeBudgetSeconds:  int(cfg.TimeBudget.Seconds()),
+		MaxLinksPerPage:    cfg.MaxLinksPerPage,
+		GlobalConcurrency:  cfg.GlobalConcurrency,
+		PerHostConcurrency: cfg.PerHostConcurrency,
+		UserAgent:          cfg.UserAgent,
+		RespectRobots:      cfg.RespectRobots,
+	})
 	if err != nil {
 		return uuid.Nil, err
 	}

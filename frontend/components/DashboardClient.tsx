@@ -7,6 +7,7 @@ import { LineChart } from './LineChart';
 import { GraphCanvas } from './GraphCanvas';
 import { HostsTable } from './HostsTable';
 import { ErrorsPanel } from './ErrorsPanel';
+import { PersonalityCards } from './PersonalityCards';
 import { Frame } from '@/lib/types';
 
 export function DashboardClient({ runId }: { runId: string }) {
@@ -23,7 +24,8 @@ export function DashboardClient({ runId }: { runId: string }) {
 
   const sourceRef = useRef<EventSource | null>(null);
   const [status, setStatus] = useState('connecting');
-  const [pending, startTransition] = useTransition();
+  const [isStopping, startStopTransition] = useTransition();
+  const [, startFrameTransition] = useTransition();
 
   useEffect(() => {
     const source = new EventSource(`${API_BASE}/runs/${runId}/events`);
@@ -32,7 +34,9 @@ export function DashboardClient({ runId }: { runId: string }) {
     const onFrame = (event: MessageEvent<string>) => {
       try {
         const frame = JSON.parse(event.data) as Frame;
-        applyFrame(frame);
+        startFrameTransition(() => {
+          applyFrame(frame);
+        });
         setStatus('live');
       } catch {
         setStatus('error');
@@ -46,10 +50,10 @@ export function DashboardClient({ runId }: { runId: string }) {
       source.removeEventListener('frame', onFrame as EventListener);
       source.close();
     };
-  }, [applyFrame, runId]);
+  }, [applyFrame, runId, startFrameTransition]);
 
   const stopRun = async () => {
-    startTransition(() => {
+    startStopTransition(() => {
       void fetchJSON(`/runs/${runId}/stop`, { method: 'POST' }).then(() => {
         setStatus('stopped');
       });
@@ -69,8 +73,8 @@ export function DashboardClient({ runId }: { runId: string }) {
             {lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : '—'}.
           </p>
         </div>
-        <button className="button secondary" onClick={stopRun} disabled={pending}>
-          {pending ? 'Stopping…' : 'Stop Run'}
+        <button className="button secondary" onClick={stopRun} disabled={isStopping}>
+          {isStopping ? 'Stopping…' : 'Stop Run'}
         </button>
       </div>
 
@@ -101,6 +105,8 @@ export function DashboardClient({ runId }: { runId: string }) {
           <ErrorsPanel errors={errors} />
         </div>
       </section>
+
+      <PersonalityCards hosts={hosts} />
 
       <HostsTable hosts={hosts} />
     </div>
