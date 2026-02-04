@@ -22,6 +22,7 @@ type RunState struct {
 	CreatedAt time.Time
 	StartedAt *time.Time
 	StoppedAt *time.Time
+	StopReason string
 }
 
 type RunManager struct {
@@ -81,7 +82,7 @@ func (rm *RunManager) StartRun(ctx context.Context, id uuid.UUID) error {
 	state.Status = "running"
 	state.StartedAt = &now
 
-	if err := rm.store.UpdateRunStatus(ctx, id, "running", &now, nil); err != nil {
+	if err := rm.store.UpdateRunStatus(ctx, id, "running", &now, nil, nil); err != nil {
 		return err
 	}
 	engine.Start(state.Config.SeedURL)
@@ -92,6 +93,11 @@ func (rm *RunManager) StartRun(ctx context.Context, id uuid.UUID) error {
 		stoppedAt := time.Now()
 		state.Status = "stopped"
 		state.StoppedAt = &stoppedAt
+		stopReason := engine.StopReason()
+		if stopReason == "" {
+			stopReason = crawler.StopReasonUnknown
+		}
+		state.StopReason = stopReason
 	}()
 	return nil
 }
@@ -104,12 +110,13 @@ func (rm *RunManager) StopRun(ctx context.Context, id uuid.UUID) error {
 		return errors.New("run not found")
 	}
 	if state.Engine != nil {
-		state.Engine.Stop()
+		state.Engine.StopWithReason(crawler.StopReasonManual)
 	}
 	now := time.Now()
 	state.Status = "stopped"
 	state.StoppedAt = &now
-	return rm.store.UpdateRunStatus(ctx, id, "stopped", nil, &now)
+	state.StopReason = crawler.StopReasonManual
+	return rm.store.UpdateRunStatus(ctx, id, "stopped", nil, &now, &state.StopReason)
 }
 
 func (rm *RunManager) GetRun(ctx context.Context, id uuid.UUID) (RunState, error) {
@@ -153,6 +160,12 @@ func (rm *RunManager) GetRun(ctx context.Context, id uuid.UUID) (RunState, error
 			}
 			return nil
 		}(),
+		StopReason: func() string {
+			if row.StopReason.Valid {
+				return row.StopReason.String
+			}
+			return ""
+		}(),
 	}, nil
 }
 
@@ -164,6 +177,14 @@ func (rm *RunManager) TelemetryFor(id uuid.UUID) (*metrics.Telemetry, bool) {
 		return nil, false
 	}
 	return state.Telemetry, true
+}
+
+func (rm *RunManager) Summary(ctx context.Context, id uuid.UUID) (storage.RunSummary, error) {
+	return rm.store.GetRunSummary(ctx, id)
+}
+
+func (rm *RunManager) ListPages(ctx context.Context, id uuid.UUID, limit int) ([]storage.PageRow, error) {
+	return rm.store.ListPages(ctx, id, limit)
 }
 
 func (rm *RunManager) applyDefaults(cfg crawler.RunConfig) crawler.RunConfig {

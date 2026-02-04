@@ -4,13 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node node_modules/next/dist/bin/next dev -p 3000",
-    "build": "node node_modules/next/dist/bin/next build",
-    "start": "node node_modules/next/dist/bin/next start -p 3000",
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
     "lint": "next lint"
   },
   "dependencies": {
-    "@swc/helpers": "^0.5.18",
+    "@swc/helpers": "file:./vendor/swc-helpers",
     "graceful-fs": "file:./vendor/graceful-fs",
     "next": "16.1.6",
     "react": "18.2.0",

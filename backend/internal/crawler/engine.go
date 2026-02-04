@@ -47,8 +47,17 @@ type Engine struct {
 
 	startedAt time.Time
 	pagesFetched atomic.Int64
+	stopReasonMu sync.Mutex
+	stopReason   string
 	stopOnce sync.Once
 }
+
+const (
+	StopReasonManual    = "manual"
+	StopReasonMaxPages  = "max_pages"
+	StopReasonTimeBudget = "time_budget"
+	StopReasonUnknown   = "unknown"
+)
 
 type errorRecord struct {
 	runID   uuid.UUID
@@ -184,13 +193,42 @@ func (e *Engine) Start(seed string) {
 func (e *Engine) monitorStop() {
 	<-e.ctx.Done()
 	now := time.Now()
-	_ = e.store.UpdateRunStatus(context.Background(), e.runID, "stopped", nil, &now)
+	reason := e.StopReason()
+	if reason == "" {
+		reason = StopReasonUnknown
+	}
+	_ = e.store.UpdateRunStatus(context.Background(), e.runID, "stopped", nil, &now, &reason)
 }
 
 func (e *Engine) Stop() {
+	e.StopWithReason(StopReasonManual)
+}
+
+func (e *Engine) StopWithReason(reason string) {
+	if reason == "" {
+		reason = StopReasonManual
+	}
+	e.setStopReason(reason)
 	e.stopOnce.Do(func() {
 		e.cancel()
 	})
+}
+
+func (e *Engine) StopReason() string {
+	e.stopReasonMu.Lock()
+	defer e.stopReasonMu.Unlock()
+	return e.stopReason
+}
+
+func (e *Engine) setStopReason(reason string) {
+	if reason == "" {
+		return
+	}
+	e.stopReasonMu.Lock()
+	defer e.stopReasonMu.Unlock()
+	if e.stopReason == "" {
+		e.stopReason = reason
+	}
 }
 
 func (e *Engine) PagesFetched() int64 {
@@ -208,7 +246,7 @@ func (e *Engine) stopAfterBudget() {
 	case <-e.ctx.Done():
 		return
 	case <-t.C:
-		e.Stop()
+		e.StopWithReason(StopReasonTimeBudget)
 	}
 }
 
@@ -376,7 +414,7 @@ func (e *Engine) recordFetch(task *Task, status int, contentType string, body []
 	}
 
 	if e.cfg.MaxPages > 0 && int(e.pagesFetched.Load()) >= e.cfg.MaxPages {
-		e.Stop()
+		e.StopWithReason(StopReasonMaxPages)
 	}
 
 	fetchedAt := time.Now()

@@ -4,7 +4,12 @@ import { useEffect, useRef } from 'react';
 
 type Edge = { src: string; dst: string; count: number };
 
-export function GraphCanvas({ nodes, edges }: { nodes: string[]; edges: Edge[] }) {
+interface GraphCanvasProps {
+  nodes: string[];
+  edges: Edge[];
+}
+
+export function GraphCanvas({ nodes, edges }: GraphCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -16,63 +21,80 @@ export function GraphCanvas({ nodes, edges }: { nodes: string[]; edges: Edge[] }
     const dpr = window.devicePixelRatio || 1;
     const width = canvas.clientWidth * dpr;
     const height = canvas.clientHeight * dpr;
+
     canvas.width = width;
     canvas.height = height;
 
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = 'rgba(225, 93, 59, 0.06)';
+    // Clear with background
+    ctx.fillStyle = '#f4f3f0';
     ctx.fillRect(0, 0, width, height);
+
+    if (nodes.length === 0) {
+      ctx.fillStyle = '#999999';
+      ctx.font = `${14 * dpr}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Waiting for hosts...', width / 2, height / 2);
+      return;
+    }
 
     const centerX = width / 2;
     const centerY = height / 2;
-    const radius = Math.min(width, height) * 0.38;
+    const maxRadius = Math.min(width, height) * 0.4;
 
+    // Calculate positions using golden angle for even distribution
     const positions = new Map<string, { x: number; y: number }>();
-    const fontFamily =
-      getComputedStyle(document.documentElement).getPropertyValue('--font-body') || 'sans-serif';
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
 
-    nodes.forEach((host) => {
-      const h = hash(host);
-      const angle = (h % 360) * (Math.PI / 180);
-      const r = radius * (0.4 + ((h % 100) / 100) * 0.6);
+    nodes.forEach((host, index) => {
+      const angle = index * goldenAngle;
+      const distFactor = 0.3 + (index / Math.max(nodes.length, 1)) * 0.7;
+      const r = maxRadius * distFactor;
       const x = centerX + Math.cos(angle) * r;
       const y = centerY + Math.sin(angle) * r;
       positions.set(host, { x, y });
     });
 
-    ctx.strokeStyle = 'rgba(15, 123, 108, 0.25)';
-    ctx.lineWidth = 1.2 * dpr;
+    // Draw edges
     edges.forEach((edge) => {
       const from = positions.get(edge.src);
       const to = positions.get(edge.dst);
       if (!from || !to) return;
+
+      const intensity = Math.min(edge.count / 10, 1);
+      ctx.strokeStyle = `rgba(224, 122, 95, ${0.15 + intensity * 0.25})`;
+      ctx.lineWidth = (1 + intensity) * dpr;
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);
       ctx.lineTo(to.x, to.y);
       ctx.stroke();
     });
 
+    // Draw nodes
     nodes.forEach((host) => {
       const pos = positions.get(host);
       if (!pos) return;
-      ctx.fillStyle = 'rgba(225, 93, 59, 0.9)';
+
+      // Node circle
+      ctx.fillStyle = '#e07a5f';
       ctx.beginPath();
       ctx.arc(pos.x, pos.y, 4 * dpr, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#1b1812';
-      ctx.font = `${10 * dpr}px ${fontFamily}`;
-      ctx.fillText(host, pos.x + 6 * dpr, pos.y - 6 * dpr);
+
+      // Label
+      ctx.fillStyle = '#1a1a1a';
+      ctx.font = `${10 * dpr}px system-ui, sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+
+      const displayHost = host.length > 18 ? host.slice(0, 15) + '...' : host;
+      ctx.fillText(displayHost, pos.x + 8 * dpr, pos.y);
     });
   }, [nodes, edges]);
 
-  return <canvas ref={canvasRef} className="graph-canvas" />;
-}
-
-function hash(input: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return Math.abs(h);
+  return (
+    <div className="graph-wrapper">
+      <canvas ref={canvasRef} className="graph-canvas" />
+    </div>
+  );
 }

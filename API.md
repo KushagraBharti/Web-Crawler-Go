@@ -60,10 +60,19 @@ Response
   "created_at": "timestamp",
   "started_at": "timestamp",
   "stopped_at": null,
+  "storage_mode": "memory",
+  "stop_reason": "manual",
   "limits": {
     "max_depth": 3,
     "max_pages": 5000,
     "time_budget_seconds": 600
+  },
+  "summary": {
+    "pages_fetched": 1200,
+    "pages_failed": 40,
+    "unique_hosts": 180,
+    "total_bytes": 9823456,
+    "last_fetched_at": "timestamp"
   },
   "stats": {
     "pages_fetched": 1200,
@@ -88,6 +97,34 @@ Event: `frame`
     "nodes": ["example.com"],
     "edges": [ ["example.com", "other.com", 3] ]
   }
+}
+```
+
+### GET /runs/{id}/pages
+List most recent pages collected for a run.
+
+Query
+```
+?limit=50
+```
+
+Response
+```json
+{
+  "items": [
+    {
+      "url": "https://example.com/page",
+      "host": "example.com",
+      "depth": 1,
+      "status_code": 200,
+      "content_type": "text/html",
+      "fetch_ms": 120,
+      "size_bytes": 34210,
+      "error_class": "",
+      "error_message": "",
+      "fetched_at": "timestamp"
+    }
+  ]
 }
 ```
 

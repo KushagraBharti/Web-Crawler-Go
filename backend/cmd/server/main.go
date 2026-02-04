@@ -21,38 +21,32 @@ import (
 func main() {
 	cfg := config.Load()
 	var store storage.Store
+	storageMode := "memory"
 	if cfg.DisableDB || cfg.DatabaseURL == "" {
 		store = storage.NewMemory()
 		log.Printf("running in memory-only mode (no database)")
 	} else {
 		db, err := sql.Open("pgx", cfg.DatabaseURL)
 		if err != nil {
-			if cfg.AllowDBFallback {
-				log.Printf("db open failed (%v); falling back to memory store", err)
-				store = storage.NewMemory()
-			} else {
-				log.Fatalf("db open: %v", err)
-			}
+			log.Printf("db open failed (%v); falling back to memory store", err)
+			store = storage.NewMemory()
 		} else {
 			defer db.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			sqlStore := storage.NewSQL(db)
 			if err := sqlStore.Migrate(ctx); err != nil {
-				if cfg.AllowDBFallback {
-					log.Printf("migrate failed (%v); falling back to memory store", err)
-					store = storage.NewMemory()
-				} else {
-					log.Fatalf("migrate: %v", err)
-				}
+				log.Printf("migrate failed (%v); falling back to memory store", err)
+				store = storage.NewMemory()
 			} else {
 				store = sqlStore
+				storageMode = "postgres"
 			}
 		}
 	}
 
 	runManager := api.NewRunManager(store, cfg.Defaults)
-	server := api.NewServer(runManager, cfg.AllowedOrigin)
+	server := api.NewServer(runManager, cfg.AllowedOrigin, storageMode)
 
 	srv := &http.Server{
 		Addr:    ":" + itoa(cfg.Port),

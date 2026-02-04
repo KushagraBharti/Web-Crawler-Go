@@ -2,19 +2,31 @@
 
 import { Frame } from '@/lib/types';
 
-export function ErrorsPanel({ errors }: { errors: Frame['errors'] }) {
+interface ErrorsPanelProps {
+  errors: Frame['errors'];
+}
+
+export function ErrorsPanel({ errors }: ErrorsPanelProps) {
+  const total = errors.reduce((sum, err) => sum + err.count, 0);
+
   return (
     <div className="panel">
-      <div className="badge">Errors</div>
-      <h2 style={{ marginTop: 12 }}>Failure taxonomy</h2>
+      <span className="badge badge--error">Errors</span>
+      <h3 style={{ marginTop: '1rem' }}>Failure Types</h3>
+      {total > 0 && (
+        <p style={{ fontSize: '0.875rem', marginTop: '0.25rem' }}>
+          {total} total errors
+        </p>
+      )}
+
       <div className="error-list">
         {errors.length === 0 ? (
-          <p>No errors reported yet.</p>
+          <div className="empty-state">No errors</div>
         ) : (
           errors.map((err) => (
             <div className="error-item" key={err.class}>
-              <span>{err.class}</span>
-              <strong>{err.count}</strong>
+              <span className="error-item__class">{err.class}</span>
+              <span className="error-item__count">{err.count}</span>
             </div>
           ))
         )}

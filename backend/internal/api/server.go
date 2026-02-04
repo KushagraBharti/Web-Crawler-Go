@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"webcrawler/internal/crawler"
+	"webcrawler/internal/storage"
 	"webcrawler/internal/util"
 )
 
@@ -17,15 +19,16 @@ type Server struct {
 	router     chi.Router
 	runManager *RunManager
 	allowedOrigin string
+	storageMode string
 }
 
-func NewServer(runManager *RunManager, allowedOrigin string) *Server {
+func NewServer(runManager *RunManager, allowedOrigin string, storageMode string) *Server {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 
-	s := &Server{router: r, runManager: runManager, allowedOrigin: allowedOrigin}
+	s := &Server{router: r, runManager: runManager, allowedOrigin: allowedOrigin, storageMode: storageMode}
 	s.routes()
 	return s
 }
@@ -37,6 +40,7 @@ func (s *Server) routes() {
 	s.router.Post("/runs/{id}/start", s.handleStartRun)
 	s.router.Post("/runs/{id}/stop", s.handleStopRun)
 	s.router.Get("/runs/{id}", s.handleGetRun)
+	s.router.Get("/runs/{id}/pages", s.handleListPages)
 	s.router.Get("/runs/{id}/events", s.handleEvents)
 
 	s.router.Handle("/metrics", promhttp.Handler())
@@ -153,6 +157,14 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	if state.Engine != nil {
 		stats["pages_fetched"] = state.Engine.PagesFetched()
 	}
+	stopReason := state.StopReason
+	if stopReason == "" && state.Status == "running" {
+		stopReason = "running"
+	}
+	summary, summaryErr := s.runManager.Summary(r.Context(), id)
+	if summaryErr != nil {
+		summary = storage.RunSummary{}
+	}
 
 	payload := map[string]any{
 		"id": state.ID.String(),
@@ -160,14 +172,43 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		"created_at": state.CreatedAt,
 		"started_at": state.StartedAt,
 		"stopped_at": state.StoppedAt,
+		"storage_mode": s.storageMode,
+		"stop_reason": stopReason,
 		"limits": map[string]any{
 			"max_depth": state.Config.MaxDepth,
 			"max_pages": state.Config.MaxPages,
 			"time_budget_seconds": int(state.Config.TimeBudget.Seconds()),
 		},
+		"summary": map[string]any{
+			"pages_fetched":  summary.PagesFetched,
+			"pages_failed":   summary.PagesFailed,
+			"unique_hosts":   summary.UniqueHosts,
+			"total_bytes":    summary.TotalBytes,
+			"last_fetched_at": summary.LastFetchedAt,
+		},
 		"stats": stats,
 	}
 	util.WriteJSON(w, http.StatusOK, payload)
+}
+
+func (s *Server) handleListPages(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		util.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 500 {
+			limit = parsed
+		}
+	}
+	pages, err := s.runManager.ListPages(r.Context(), id, limit)
+	if err != nil {
+		util.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	util.WriteJSON(w, http.StatusOK, map[string]any{"items": pages})
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

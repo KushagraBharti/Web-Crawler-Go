@@ -8,7 +8,9 @@ import { GraphCanvas } from './GraphCanvas';
 import { HostsTable } from './HostsTable';
 import { ErrorsPanel } from './ErrorsPanel';
 import { PersonalityCards } from './PersonalityCards';
-import { Frame } from '@/lib/types';
+import { RunSummaryPanel } from './RunSummaryPanel';
+import { PagesTable } from './PagesTable';
+import { Frame, PageRow, RunSummary } from '@/lib/types';
 
 export function DashboardClient({ runId }: { runId: string }) {
   const applyFrame = useRunStore((s) => s.applyFrame);
@@ -23,9 +25,16 @@ export function DashboardClient({ runId }: { runId: string }) {
   const lastUpdated = useRunStore((s) => s.lastUpdated);
 
   const sourceRef = useRef<EventSource | null>(null);
-  const [status, setStatus] = useState('connecting');
+  const [status, setStatus] = useState<'connecting' | 'live' | 'reconnecting' | 'stopped' | 'error'>('connecting');
+  const [storageMode, setStorageMode] = useState<'memory' | 'postgres' | null>(null);
+  const [runStatus, setRunStatus] = useState<string>('');
+  const [stopReason, setStopReason] = useState<string>('');
+  const [summary, setSummary] = useState<RunSummary | null>(null);
+  const [pages, setPages] = useState<PageRow[]>([]);
   const [isStopping, startStopTransition] = useTransition();
   const [, startFrameTransition] = useTransition();
+  const [, startStorageTransition] = useTransition();
+  const [, startSummaryTransition] = useTransition();
 
   useEffect(() => {
     const source = new EventSource(`${API_BASE}/runs/${runId}/events`);
@@ -52,6 +61,57 @@ export function DashboardClient({ runId }: { runId: string }) {
     };
   }, [applyFrame, runId, startFrameTransition]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRun = async () => {
+      try {
+        const data = await fetchJSON<{
+          storage_mode?: string;
+          status?: string;
+          stop_reason?: string;
+          summary?: RunSummary;
+        }>(`/runs/${runId}`);
+        if (cancelled) return;
+        const mode = data.storage_mode === 'postgres' ? 'postgres' : 'memory';
+        startStorageTransition(() => setStorageMode(mode));
+        startSummaryTransition(() => {
+          setRunStatus(data.status || '');
+          setStopReason(data.stop_reason || '');
+          setSummary(data.summary ?? null);
+        });
+      } catch {
+        if (!cancelled) {
+          startStorageTransition(() => setStorageMode('memory'));
+        }
+      }
+    };
+
+    const loadPages = async () => {
+      try {
+        const data = await fetchJSON<{ items: PageRow[] }>(`/runs/${runId}/pages?limit=50`);
+        if (cancelled) return;
+        startSummaryTransition(() => setPages(data.items || []));
+      } catch {
+        if (!cancelled) {
+          startSummaryTransition(() => setPages([]));
+        }
+      }
+    };
+
+    void loadRun();
+    void loadPages();
+    const interval = setInterval(() => {
+      void loadRun();
+      void loadPages();
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [runId, startStorageTransition, startSummaryTransition]);
+
   const stopRun = async () => {
     startStopTransition(() => {
       void fetchJSON(`/runs/${runId}/stop`, { method: 'POST' }).then(() => {
@@ -61,46 +121,75 @@ export function DashboardClient({ runId }: { runId: string }) {
   };
 
   const queueSeries = useMemo(() => [frontier, fetch, parse], [frontier, fetch, parse]);
+  const currentThroughput = throughput[throughput.length - 1] || 0;
 
   return (
-    <div className="stagger">
-      <div className="hero">
-        <div>
-          <div className="badge">Live Run</div>
-          <h1>Crawler Control Panel</h1>
+    <main className="stagger">
+      {storageMode === 'memory' && (
+        <section className="storage-banner" role="status" aria-live="polite">
+          <span className="badge badge--warning">Memory mode</span>
           <p>
-            Watching <strong>{runId}</strong>. The system is {status}. Last update{' '}
-            {lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : '—'}.
+            Data will not persist after the server stops. Start Postgres to enable
+            durable run history.
           </p>
+        </section>
+      )}
+      <header className="dashboard-header">
+        <div className="dashboard-header__info">
+          <h1>Dashboard</h1>
+          <div className="dashboard-header__status">
+            {status === 'live' && <span className="live-indicator">Live</span>}
+            {status !== 'live' && (
+              <span className="badge badge--warning">{status}</span>
+            )}
+            <span>Run: <code className="dashboard-header__run-id">{runId}</code></span>
+            <span>Updated: {lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : '—'}</span>
+          </div>
         </div>
-        <button className="button secondary" onClick={stopRun} disabled={isStopping}>
-          {isStopping ? 'Stopping…' : 'Stop Run'}
+        <button
+          className="button button--secondary"
+          onClick={stopRun}
+          disabled={isStopping || status === 'stopped'}
+        >
+          {isStopping ? 'Stopping...' : 'Stop'}
         </button>
-      </div>
+      </header>
+
+      <section className="grid">
+        <RunSummaryPanel status={runStatus} stopReason={stopReason} summary={summary} />
+      </section>
 
       <section className="grid">
         <div className="panel span-4">
-          <div className="badge">Throughput</div>
-          <h2 style={{ marginTop: 12 }}>Pages per second</h2>
-          <LineChart data={throughput} label="Throughput" color="var(--accent)" />
+          <span className="badge badge--success">Throughput</span>
+          <div style={{ marginTop: '1rem' }}>
+            <span className="metric-large">{currentThroughput.toFixed(1)}</span>
+            <span style={{ marginLeft: '0.5rem', color: 'var(--text-tertiary)' }}>pages/sec</span>
+          </div>
+          <LineChart data={throughput} label="Throughput" color="var(--success)" />
         </div>
+
         <div className="panel span-8">
-          <div className="badge">Queues</div>
-          <h2 style={{ marginTop: 12 }}>Backpressure breathing</h2>
+          <span className="badge">Queue Depths</span>
+          <h3 style={{ marginTop: '1rem' }}>Backpressure</h3>
           <div className="queue-grid">
-            <LineChart data={queueSeries[0]} label="Frontier" color="var(--accent-2)" />
-            <LineChart data={queueSeries[1]} label="Fetch" color="var(--accent)" />
-            <LineChart data={queueSeries[2]} label="Parse" color="var(--accent-3)" />
+            <LineChart data={queueSeries[0]} label="Frontier" color="var(--accent)" />
+            <LineChart data={queueSeries[1]} label="Fetch" color="var(--info)" />
+            <LineChart data={queueSeries[2]} label="Parse" color="var(--success)" />
           </div>
         </div>
       </section>
 
       <section className="grid">
         <div className="panel span-7">
-          <div className="badge">Domain Graph</div>
-          <h2 style={{ marginTop: 12 }}>Cross-host map</h2>
+          <span className="badge">Network</span>
+          <h3 style={{ marginTop: '1rem' }}>Domain Graph</h3>
+          <p style={{ fontSize: '0.875rem', marginTop: '0.25rem' }}>
+            {nodes.length} hosts, {edges.length} connections
+          </p>
           <GraphCanvas nodes={nodes} edges={edges} />
         </div>
+
         <div className="span-5">
           <ErrorsPanel errors={errors} />
         </div>
@@ -109,6 +198,10 @@ export function DashboardClient({ runId }: { runId: string }) {
       <PersonalityCards hosts={hosts} />
 
       <HostsTable hosts={hosts} />
-    </div>
+
+      <section className="grid">
+        <PagesTable pages={pages} runId={runId} />
+      </section>
+    </main>
   );
 }

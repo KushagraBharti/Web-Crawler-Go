@@ -12,8 +12,10 @@ import (
 type Store interface {
 	Migrate(ctx context.Context) error
 	CreateRun(ctx context.Context, cfg RunConfig) (uuid.UUID, error)
-	UpdateRunStatus(ctx context.Context, id uuid.UUID, status string, startedAt, stoppedAt *time.Time) error
+	UpdateRunStatus(ctx context.Context, id uuid.UUID, status string, startedAt, stoppedAt *time.Time, stopReason *string) error
 	GetRun(ctx context.Context, id uuid.UUID) (RunRow, error)
+	GetRunSummary(ctx context.Context, id uuid.UUID) (RunSummary, error)
+	ListPages(ctx context.Context, id uuid.UUID, limit int) ([]PageRow, error)
 	InsertPage(ctx context.Context, rec PageRecord) error
 	InsertError(ctx context.Context, runID uuid.UUID, host, url, class, message string) error
 	UpsertEdge(ctx context.Context, runID uuid.UUID, src, dst string, count int) error
@@ -41,6 +43,7 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			created_at timestamptz NOT NULL,
 			started_at timestamptz,
 			stopped_at timestamptz,
+			stop_reason text,
 			max_depth int,
 			max_pages int,
 			time_budget_seconds int,
@@ -51,6 +54,7 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			respect_robots boolean
 		);`,
 		`CREATE INDEX IF NOT EXISTS runs_status_idx ON runs(status);`,
+		`ALTER TABLE runs ADD COLUMN IF NOT EXISTS stop_reason text;`,
 		`CREATE TABLE IF NOT EXISTS pages (
 			id bigserial PRIMARY KEY,
 			run_id uuid REFERENCES runs(id),
@@ -141,8 +145,8 @@ func (s *SQLStore) CreateRun(ctx context.Context, cfg RunConfig) (uuid.UUID, err
 	return id, err
 }
 
-func (s *SQLStore) UpdateRunStatus(ctx context.Context, id uuid.UUID, status string, startedAt, stoppedAt *time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status=$1, started_at=COALESCE($2, started_at), stopped_at=COALESCE($3, stopped_at) WHERE id=$4`, status, startedAt, stoppedAt, id)
+func (s *SQLStore) UpdateRunStatus(ctx context.Context, id uuid.UUID, status string, startedAt, stoppedAt *time.Time, stopReason *string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status=$1, started_at=COALESCE($2, started_at), stopped_at=COALESCE($3, stopped_at), stop_reason=COALESCE($4, stop_reason) WHERE id=$5`, status, startedAt, stoppedAt, nullableStringPtr(stopReason), id)
 	return err
 }
 
@@ -153,6 +157,7 @@ type RunRow struct {
 	CreatedAt          time.Time
 	StartedAt          sql.NullTime
 	StoppedAt          sql.NullTime
+	StopReason         sql.NullString
 	MaxDepth           int
 	MaxPages           int
 	TimeBudgetSeconds  int
@@ -164,10 +169,101 @@ type RunRow struct {
 }
 
 func (s *SQLStore) GetRun(ctx context.Context, id uuid.UUID) (RunRow, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, seed_url, status, created_at, started_at, stopped_at, max_depth, max_pages, time_budget_seconds, max_links_per_page, global_concurrency, per_host_concurrency, user_agent, respect_robots FROM runs WHERE id=$1`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, seed_url, status, created_at, started_at, stopped_at, stop_reason, max_depth, max_pages, time_budget_seconds, max_links_per_page, global_concurrency, per_host_concurrency, user_agent, respect_robots FROM runs WHERE id=$1`, id)
 	var rr RunRow
-	err := row.Scan(&rr.ID, &rr.SeedURL, &rr.Status, &rr.CreatedAt, &rr.StartedAt, &rr.StoppedAt, &rr.MaxDepth, &rr.MaxPages, &rr.TimeBudgetSeconds, &rr.MaxLinksPerPage, &rr.GlobalConcurrency, &rr.PerHostConcurrency, &rr.UserAgent, &rr.RespectRobots)
+	err := row.Scan(&rr.ID, &rr.SeedURL, &rr.Status, &rr.CreatedAt, &rr.StartedAt, &rr.StoppedAt, &rr.StopReason, &rr.MaxDepth, &rr.MaxPages, &rr.TimeBudgetSeconds, &rr.MaxLinksPerPage, &rr.GlobalConcurrency, &rr.PerHostConcurrency, &rr.UserAgent, &rr.RespectRobots)
 	return rr, err
+}
+
+type RunSummary struct {
+	PagesFetched  int64
+	PagesFailed   int64
+	UniqueHosts   int64
+	TotalBytes    int64
+	LastFetchedAt *time.Time
+}
+
+type PageRow struct {
+	URL          string
+	Host         string
+	Depth        int
+	StatusCode   int
+	ContentType  string
+	FetchMS      int64
+	SizeBytes    int64
+	ErrorClass   string
+	ErrorMessage string
+	FetchedAt    *time.Time
+}
+
+func (s *SQLStore) GetRunSummary(ctx context.Context, id uuid.UUID) (RunSummary, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT
+		COALESCE(COUNT(*) FILTER (WHERE error_class IS NULL), 0) AS pages_fetched,
+		COALESCE(COUNT(*) FILTER (WHERE error_class IS NOT NULL), 0) AS pages_failed,
+		COALESCE(COUNT(DISTINCT host), 0) AS unique_hosts,
+		COALESCE(SUM(size_bytes), 0) AS total_bytes,
+		MAX(fetched_at) AS last_fetched_at
+		FROM pages WHERE run_id=$1`, id)
+	var summary RunSummary
+	var lastFetched sql.NullTime
+	if err := row.Scan(&summary.PagesFetched, &summary.PagesFailed, &summary.UniqueHosts, &summary.TotalBytes, &lastFetched); err != nil {
+		return RunSummary{}, err
+	}
+	if lastFetched.Valid {
+		summary.LastFetchedAt = &lastFetched.Time
+	}
+	return summary, nil
+}
+
+func (s *SQLStore) ListPages(ctx context.Context, id uuid.UUID, limit int) ([]PageRow, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT url, host, depth, status_code, content_type, fetch_ms, size_bytes, error_class, error_message, fetched_at
+		FROM pages WHERE run_id=$1
+		ORDER BY fetched_at DESC NULLS LAST, discovered_at DESC
+		LIMIT $2`, id, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PageRow
+	for rows.Next() {
+		var row PageRow
+		var status sql.NullInt32
+		var ct sql.NullString
+		var fetchMS sql.NullInt32
+		var size sql.NullInt64
+		var errClass sql.NullString
+		var errMsg sql.NullString
+		var fetched sql.NullTime
+		if err := rows.Scan(&row.URL, &row.Host, &row.Depth, &status, &ct, &fetchMS, &size, &errClass, &errMsg, &fetched); err != nil {
+			return nil, err
+		}
+		if status.Valid {
+			row.StatusCode = int(status.Int32)
+		}
+		if ct.Valid {
+			row.ContentType = ct.String
+		}
+		if fetchMS.Valid {
+			row.FetchMS = int64(fetchMS.Int32)
+		}
+		if size.Valid {
+			row.SizeBytes = size.Int64
+		}
+		if errClass.Valid {
+			row.ErrorClass = errClass.String
+		}
+		if errMsg.Valid {
+			row.ErrorMessage = errMsg.String
+		}
+		if fetched.Valid {
+			row.FetchedAt = &fetched.Time
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 type PageRecord struct {
@@ -218,6 +314,13 @@ func nullableString(s string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+func nullableStringPtr(s *string) sql.NullString {
+	if s == nil || *s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *s, Valid: true}
 }
 
 func nullableInt(n int) sql.NullInt32 {

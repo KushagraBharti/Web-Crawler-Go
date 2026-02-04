@@ -17,3 +17,24 @@ export type Frame = {
     edges: [string, string, number][];
   };
 };
+
+export type RunSummary = {
+  pages_fetched: number;
+  pages_failed: number;
+  unique_hosts: number;
+  total_bytes: number;
+  last_fetched_at?: string | null;
+};
+
+export type PageRow = {
+  url: string;
+  host: string;
+  depth: number;
+  status_code: number;
+  content_type: string;
+  fetch_ms: number;
+  size_bytes: number;
+  error_class: string;
+  error_message: string;
+  fetched_at?: string | null;
+};

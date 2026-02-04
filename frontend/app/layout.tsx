@@ -1,21 +1,21 @@
 import './globals.css';
-import { Bodoni_Moda, Familjen_Grotesk } from 'next/font/google';
+import { Cormorant_Garamond, DM_Sans } from 'next/font/google';
 
-const display = Bodoni_Moda({
+const display = Cormorant_Garamond({
   subsets: ['latin'],
   variable: '--font-display',
-  weight: ['400', '600', '700']
+  weight: ['400', '500', '600']
 });
 
-const body = Familjen_Grotesk({
+const body = DM_Sans({
   subsets: ['latin'],
   variable: '--font-body',
   weight: ['400', '500', '600']
 });
 
 export const metadata = {
-  title: 'Web Crawler Control Panel',
-  description: 'High-performance crawler with live observability.'
+  title: 'Arachne — Web Crawler',
+  description: 'A web crawler with real-time observability.'
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -47,86 +47,116 @@ export function RunForm() {
 
   return (
     <form className="panel" onSubmit={onSubmit}>
-      <div className="badge">Create Run</div>
-      <h2 style={{ marginTop: 16 }}>Launch a crawl run</h2>
-      <p style={{ marginTop: 8 }}>
-        Set safety limits, concurrency, and a seed URL. The crawler will self-throttle to keep things stable.
+      <span className="badge">New Crawl</span>
+      <h2 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Start a crawl</h2>
+      <p style={{ marginBottom: '1.5rem' }}>
+        Configure limits and concurrency. The crawler will self-throttle.
       </p>
-      <div className="form-grid" style={{ marginTop: 24 }}>
-        <label>
-          Seed URL
+
+      <div className="form-grid">
+        <div className="form-group form-group--full">
+          <label className="form-label">Target URL</label>
           <input
+            className="form-input"
             type="url"
             required
             placeholder="https://example.com"
             value={form.seed_url}
             onChange={(e) => update('seed_url', e.target.value)}
           />
-        </label>
-        <label>
-          Max Depth
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Max Depth</label>
           <input
+            className="form-input"
             type="number"
+            min={1}
+            max={10}
             value={form.max_depth}
             onChange={(e) => update('max_depth', Number(e.target.value))}
           />
-        </label>
-        <label>
-          Max Pages
+        </div>
+        <div className="form-group">
+          <label className="form-label">Max Pages</label>
           <input
+            className="form-input"
             type="number"
+            min={1}
             value={form.max_pages}
             onChange={(e) => update('max_pages', Number(e.target.value))}
           />
-        </label>
-        <label>
-          Time Budget (sec)
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Time Budget (sec)</label>
           <input
+            className="form-input"
             type="number"
+            min={10}
             value={form.time_budget_seconds}
             onChange={(e) => update('time_budget_seconds', Number(e.target.value))}
           />
-        </label>
-        <label>
-          Max Links / Page
+        </div>
+        <div className="form-group">
+          <label className="form-label">Links per Page</label>
           <input
+            className="form-input"
             type="number"
+            min={1}
             value={form.max_links_per_page}
             onChange={(e) => update('max_links_per_page', Number(e.target.value))}
           />
-        </label>
-        <label>
-          Global Concurrency
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Global Concurrency</label>
           <input
+            className="form-input"
             type="number"
+            min={1}
+            max={256}
             value={form.global_concurrency}
             onChange={(e) => update('global_concurrency', Number(e.target.value))}
           />
-        </label>
-        <label>
-          Per-host Concurrency
+        </div>
+        <div className="form-group">
+          <label className="form-label">Per-Host Concurrency</label>
           <input
+            className="form-input"
             type="number"
+            min={1}
+            max={16}
             value={form.per_host_concurrency}
             onChange={(e) => update('per_host_concurrency', Number(e.target.value))}
           />
-        </label>
-        <label className="toggle">
-          Respect Robots
-          <input
-            type="checkbox"
-            checked={form.respect_robots}
-            onChange={(e) => update('respect_robots', e.target.checked)}
-          />
-        </label>
+        </div>
+
+        <div className="form-group form-group--full">
+          <div
+            className={`toggle-wrapper ${form.respect_robots ? 'active' : ''}`}
+            onClick={() => update('respect_robots', !form.respect_robots)}
+          >
+            <div>
+              <span className="form-label">Respect robots.txt</span>
+            </div>
+            <div className="toggle-track" />
+          </div>
+        </div>
       </div>
-      {error ? <p style={{ color: '#b3311a', marginTop: 12 }}>{error}</p> : null}
-      <div style={{ marginTop: 24, display: 'flex', gap: 12, alignItems: 'center' }}>
+
+      {error && (
+        <p style={{ color: 'var(--error)', marginTop: '1rem', fontSize: '0.875rem' }}>
+          {error}
+        </p>
+      )}
+
+      <div style={{ marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
         <button className="button" disabled={pending} type="submit">
-          {pending ? 'Starting…' : 'Start Crawl'}
+          {pending ? 'Starting...' : 'Start Crawl'}
         </button>
-        <span style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.16em', color: 'var(--muted)' }}>
-          Live dashboard opens automatically
+        <span style={{ fontSize: '0.8125rem', color: 'var(--text-tertiary)' }}>
+          Dashboard opens automatically
         </span>
       </div>
     </form>
