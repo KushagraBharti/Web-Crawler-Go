@@ -8,4 +8,4 @@ Single place to collect anything that requires user input (credentials, environm
 - Then continue working on the next best parallel task.
 
 ## Current Blockers
-- None
+- 2026-02-04: Go toolchain not available on this machine, so `go test` and `go mod tidy` could not be run here. Please run locally.

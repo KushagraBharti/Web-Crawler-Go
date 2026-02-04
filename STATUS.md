@@ -1,13 +1,15 @@
 # Status
 
 ## Current Phase
-- Not started
+- Phase 1 MVP complete (backend + frontend + infra skeleton)
 
 ## Last Checkpoint
-- None
+- Backend crawler engine, API, metrics, and storage wired
+- Next.js UI with live SSE dashboard and run creation
+- Docker Compose + Dockerfiles
 
 ## Blockers
-- None
+- Go toolchain not available on this machine (tests not run)
 
 ## Notes
-- This file should be updated during long-run autonomous work.
+- See `blocker.md` for items needing user input.
