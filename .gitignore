@@ -5,3 +5,18 @@
 
 skills to use
 
+# Go
+backend/bin
+backend/*.exe
+backend/*.test
+backend/*.out
+
+# Node / Next.js
+frontend/node_modules
+frontend/.next
+frontend/out
+frontend/.env*
+
+# Docker / Postgres
+infra/pgdata
+
