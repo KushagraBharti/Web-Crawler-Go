@@ -92,9 +92,21 @@ export function GraphCanvas({ nodes, edges }: GraphCanvasProps) {
     });
   }, [nodes, edges]);
 
+  const description = nodes.length === 0
+    ? 'Network graph: waiting for host data'
+    : `Network graph showing ${nodes.length} hosts and ${edges.length} connections`;
+
   return (
-    <div className="graph-wrapper">
-      <canvas ref={canvasRef} className="graph-canvas" />
+    <div className="graph-wrapper" role="img" aria-label={description} style={{ position: 'relative' }}>
+      <canvas ref={canvasRef} className="graph-canvas" aria-hidden="true" />
+      {nodes.length === 0 && (
+        <div className="empty-state" role="status" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div>
+            <div className="skeleton skeleton--chart" style={{ width: '200px', margin: '0 auto' }} />
+            <p style={{ marginTop: '0.75rem' }}>Waiting for hosts...</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

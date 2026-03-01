@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
 	"time"
 
@@ -14,21 +15,21 @@ import (
 )
 
 type RunState struct {
-	ID        uuid.UUID
-	Config    crawler.RunConfig
-	Status    string
-	Engine    *crawler.Engine
-	Telemetry *metrics.Telemetry
-	CreatedAt time.Time
-	StartedAt *time.Time
-	StoppedAt *time.Time
+	ID         uuid.UUID
+	Config     crawler.RunConfig
+	Status     string
+	Engine     *crawler.Engine
+	Telemetry  *metrics.Telemetry
+	CreatedAt  time.Time
+	StartedAt  *time.Time
+	StoppedAt  *time.Time
 	StopReason string
 }
 
 type RunManager struct {
 	store    storage.Store
 	defaults config.CrawlerDefaults
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	runs     map[uuid.UUID]*RunState
 }
 
@@ -64,68 +65,100 @@ func (rm *RunManager) CreateRun(ctx context.Context, cfg crawler.RunConfig) (uui
 }
 
 func (rm *RunManager) StartRun(ctx context.Context, id uuid.UUID) error {
-	rm.mu.Lock()
+	rm.mu.RLock()
 	state, ok := rm.runs[id]
-	rm.mu.Unlock()
 	if !ok {
+		rm.mu.RUnlock()
 		return errors.New("run not found")
 	}
 	if state.Engine != nil {
+		rm.mu.RUnlock()
 		return errors.New("run already started")
 	}
+	cfg := state.Config
+	rm.mu.RUnlock()
 
 	telemetry := metrics.NewTelemetry()
-	engine := crawler.NewEngine(id, state.Config, rm.store, telemetry)
+	engine := crawler.NewEngine(id, cfg, rm.store, telemetry)
 	now := time.Now()
-	state.Engine = engine
-	state.Telemetry = telemetry
-	state.Status = "running"
-	state.StartedAt = &now
 
 	if err := rm.store.UpdateRunStatus(ctx, id, "running", &now, nil, nil); err != nil {
 		return err
 	}
-	engine.Start(state.Config.SeedURL)
+
+	rm.mu.Lock()
+	state, ok = rm.runs[id]
+	if !ok {
+		rm.mu.Unlock()
+		engine.StopWithReason(crawler.StopReasonUnknown)
+		return errors.New("run not found")
+	}
+	if state.Engine != nil {
+		rm.mu.Unlock()
+		engine.StopWithReason(crawler.StopReasonUnknown)
+		return errors.New("run already started")
+	}
+	state.Engine = engine
+	state.Telemetry = telemetry
+	state.Status = "running"
+	state.StartedAt = &now
+	rm.mu.Unlock()
+
+	engine.Start(cfg.SeedURL)
 	go func() {
 		<-engine.Done()
-		rm.mu.Lock()
-		defer rm.mu.Unlock()
 		stoppedAt := time.Now()
-		state.Status = "stopped"
-		state.StoppedAt = &stoppedAt
 		stopReason := engine.StopReason()
 		if stopReason == "" {
 			stopReason = crawler.StopReasonUnknown
 		}
-		state.StopReason = stopReason
+		rm.mu.Lock()
+		if state, ok := rm.runs[id]; ok {
+			state.Status = "stopped"
+			state.StoppedAt = &stoppedAt
+			state.StopReason = stopReason
+		}
+		rm.mu.Unlock()
 	}()
 	return nil
 }
 
 func (rm *RunManager) StopRun(ctx context.Context, id uuid.UUID) error {
-	rm.mu.Lock()
+	rm.mu.RLock()
 	state, ok := rm.runs[id]
-	rm.mu.Unlock()
 	if !ok {
+		rm.mu.RUnlock()
 		return errors.New("run not found")
 	}
-	if state.Engine != nil {
-		state.Engine.StopWithReason(crawler.StopReasonManual)
+	engine := state.Engine
+	rm.mu.RUnlock()
+	if engine != nil {
+		engine.StopWithReason(crawler.StopReasonManual)
 	}
 	now := time.Now()
-	state.Status = "stopped"
-	state.StoppedAt = &now
-	state.StopReason = crawler.StopReasonManual
-	return rm.store.UpdateRunStatus(ctx, id, "stopped", nil, &now, &state.StopReason)
+	stopReason := crawler.StopReasonManual
+	if err := rm.store.UpdateRunStatus(ctx, id, "stopped", nil, &now, &stopReason); err != nil {
+		return err
+	}
+	rm.mu.Lock()
+	if state, ok := rm.runs[id]; ok {
+		state.Status = "stopped"
+		state.StoppedAt = &now
+		state.StopReason = stopReason
+	}
+	rm.mu.Unlock()
+	return nil
 }
 
 func (rm *RunManager) GetRun(ctx context.Context, id uuid.UUID) (RunState, error) {
-	rm.mu.Lock()
+	rm.mu.RLock()
 	state, ok := rm.runs[id]
-	rm.mu.Unlock()
 	if ok {
-		return *state, nil
+		snapshot := cloneRunState(state)
+		rm.mu.RUnlock()
+		return snapshot, nil
 	}
+	rm.mu.RUnlock()
 	row, err := rm.store.GetRun(ctx, id)
 	if err != nil {
 		return RunState{}, err
@@ -170,8 +203,8 @@ func (rm *RunManager) GetRun(ctx context.Context, id uuid.UUID) (RunState, error
 }
 
 func (rm *RunManager) TelemetryFor(id uuid.UUID) (*metrics.Telemetry, bool) {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
 	state, ok := rm.runs[id]
 	if !ok || state.Telemetry == nil {
 		return nil, false
@@ -185,6 +218,55 @@ func (rm *RunManager) Summary(ctx context.Context, id uuid.UUID) (storage.RunSum
 
 func (rm *RunManager) ListPages(ctx context.Context, id uuid.UUID, limit int) ([]storage.PageRow, error) {
 	return rm.store.ListPages(ctx, id, limit)
+}
+
+func (rm *RunManager) StartRetentionCleaner(ctx context.Context, interval, retention time.Duration) {
+	if retention <= 0 {
+		return
+	}
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				rm.pruneOnce(ctx, retention)
+			}
+		}
+	}()
+}
+
+func (rm *RunManager) pruneOnce(ctx context.Context, retention time.Duration) {
+	before := time.Now().Add(-retention)
+	exclude := rm.activeRunIDs()
+	deleted, err := rm.store.PruneRunsOlderThan(ctx, before, exclude)
+	if err != nil {
+		log.Printf("retention prune failed: %v", err)
+		return
+	}
+	if deleted > 0 {
+		log.Printf("retention prune deleted %d runs older than %s", deleted, before.UTC().Format(time.RFC3339))
+	}
+}
+
+func (rm *RunManager) activeRunIDs() []uuid.UUID {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	out := make([]uuid.UUID, 0, len(rm.runs))
+	for id, state := range rm.runs {
+		if state == nil {
+			continue
+		}
+		if state.Status == "running" || (state.Engine != nil && state.StopReason == "") {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func (rm *RunManager) applyDefaults(cfg crawler.RunConfig) crawler.RunConfig {
@@ -240,4 +322,17 @@ func (rm *RunManager) applyDefaults(cfg crawler.RunConfig) crawler.RunConfig {
 		cfg.CircuitResetTime = rm.defaults.CircuitResetTime
 	}
 	return cfg
+}
+
+func cloneRunState(state *RunState) RunState {
+	snapshot := *state
+	if state.StartedAt != nil {
+		t := *state.StartedAt
+		snapshot.StartedAt = &t
+	}
+	if state.StoppedAt != nil {
+		t := *state.StoppedAt
+		snapshot.StoppedAt = &t
+	}
+	return snapshot
 }

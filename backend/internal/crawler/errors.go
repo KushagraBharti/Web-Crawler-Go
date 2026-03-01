@@ -14,4 +14,5 @@ const (
 	ErrMaxDepth      = "max_depth"
 	ErrMaxPages      = "max_pages"
 	ErrFetch         = "fetch"
+	ErrBlockedTarget = "blocked_target"
 )

@@ -32,31 +32,32 @@ type Engine struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	deduper   *Deduper
-	scheduler *Scheduler
-	robotsMgr *robots.Manager
-	client    *http.Client
+	deduper      *Deduper
+	scheduler    *Scheduler
+	robotsMgr    *robots.Manager
+	targetPolicy *TargetPolicy
+	client       *http.Client
 
 	enqueueCh chan *Task
 	fetchCh   chan *Task
 	parseCh   chan *FetchResult
 
-	pageWrites chan storage.PageRecord
+	pageWrites  chan storage.PageRecord
 	errorWrites chan errorRecord
 	edgeWrites  chan edgeRecord
 
-	startedAt time.Time
+	startedAt    time.Time
 	pagesFetched atomic.Int64
 	stopReasonMu sync.Mutex
 	stopReason   string
-	stopOnce sync.Once
+	stopOnce     sync.Once
 }
 
 const (
-	StopReasonManual    = "manual"
-	StopReasonMaxPages  = "max_pages"
+	StopReasonManual     = "manual"
+	StopReasonMaxPages   = "max_pages"
 	StopReasonTimeBudget = "time_budget"
-	StopReasonUnknown   = "unknown"
+	StopReasonUnknown    = "unknown"
 )
 
 type errorRecord struct {
@@ -115,22 +116,23 @@ func NewEngine(runID uuid.UUID, cfg RunConfig, store storage.Store, telemetry *m
 	scheduler := NewScheduler(ctx, enqueueCh, fetchCh, frontierCap, globalSem, cfg.PerHostConcurrency, cfg.CircuitTripCount, cfg.CircuitResetTime, cfg.RespectRobots, robotsMgr)
 
 	return &Engine{
-		runID:      runID,
-		cfg:        cfg,
-		store:      store,
-		telemetry:  telemetry,
-		ctx:        ctx,
-		cancel:     cancel,
-		deduper:    NewDeduper(64),
-		scheduler:  scheduler,
-		robotsMgr:  robotsMgr,
-		client:     client,
-		enqueueCh:  enqueueCh,
-		fetchCh:    fetchCh,
-		parseCh:    parseCh,
-		pageWrites: make(chan storage.PageRecord, 2048),
-		errorWrites: make(chan errorRecord, 1024),
-		edgeWrites: make(chan edgeRecord, 1024),
+		runID:        runID,
+		cfg:          cfg,
+		store:        store,
+		telemetry:    telemetry,
+		ctx:          ctx,
+		cancel:       cancel,
+		deduper:      NewDeduper(64),
+		scheduler:    scheduler,
+		robotsMgr:    robotsMgr,
+		targetPolicy: NewTargetPolicy(10 * time.Minute),
+		client:       client,
+		enqueueCh:    enqueueCh,
+		fetchCh:      fetchCh,
+		parseCh:      parseCh,
+		pageWrites:   make(chan storage.PageRecord, 2048),
+		errorWrites:  make(chan errorRecord, 1024),
+		edgeWrites:   make(chan edgeRecord, 1024),
 	}
 }
 
@@ -184,7 +186,7 @@ func (e *Engine) Start(seed string) {
 		go e.parseLoop()
 	}
 
-	e.enqueueURL(seed, 0, "")
+	_, _ = e.enqueueURL(seed, 0, "")
 	if e.cfg.TimeBudget > 0 {
 		go e.stopAfterBudget()
 	}
@@ -250,27 +252,37 @@ func (e *Engine) stopAfterBudget() {
 	}
 }
 
-func (e *Engine) enqueueURL(raw string, depth int, sourceHost string) {
+func (e *Engine) enqueueURL(raw string, depth int, sourceHost string) (string, bool) {
 	if e.ctx.Err() != nil {
-		return
+		return "", false
 	}
 	canonical, parsed, err := Canonicalize(raw)
 	if err != nil {
-		return
+		return "", false
+	}
+	if err := e.targetPolicy.ValidateURL(e.ctx, parsed); err != nil {
+		host := HostKey(parsed)
+		select {
+		case e.errorWrites <- errorRecord{runID: e.runID, host: host, url: parsed.String(), class: ErrBlockedTarget, message: err.Error()}:
+		default:
+		}
+		return host, false
 	}
 	if e.deduper.Seen(canonical) {
-		return
+		return HostKey(parsed), false
 	}
 	host := HostKey(parsed)
 	task := &Task{URL: parsed.String(), Canonical: canonical, Host: host, Depth: depth, SourceHost: sourceHost, DiscoveredAt: time.Now()}
 	select {
 	case e.enqueueCh <- task:
-		// ok
+		return host, true
 	default:
 		// backpressure: block until space or context done
 		select {
 		case e.enqueueCh <- task:
+			return host, true
 		case <-e.ctx.Done():
+			return host, false
 		}
 	}
 }
@@ -471,23 +483,9 @@ func (e *Engine) handleRedirect(task *Task, location string) {
 		return
 	}
 	resolved := base.ResolveReference(loc)
-	canonical, parsed, err := Canonicalize(resolved.String())
-	if err != nil {
+	host, enqueued := e.enqueueURL(resolved.String(), task.Depth, task.Host)
+	if !enqueued {
 		return
-	}
-	if e.deduper.Seen(canonical) {
-		return
-	}
-	host := HostKey(parsed)
-	task.SourceHost = task.Host
-	newTask := &Task{URL: resolved.String(), Canonical: canonical, Host: host, Depth: task.Depth, SourceHost: task.Host, DiscoveredAt: time.Now()}
-	select {
-	case e.enqueueCh <- newTask:
-	default:
-		select {
-		case e.enqueueCh <- newTask:
-		case <-e.ctx.Done():
-		}
 	}
 	if task.Host != host && e.telemetry != nil {
 		select {
@@ -543,26 +541,15 @@ func (e *Engine) handleParse(res *FetchResult) {
 				key, val, more := tok.TagAttr()
 				if string(key) == "href" {
 					link := strings.TrimSpace(string(val))
-						if link != "" {
-							if strings.HasPrefix(link, "//") {
-								link = baseURL.Scheme + ":" + link
-							}
-							parsedLink, err := url.Parse(link)
-							if err == nil {
+					if link != "" {
+						if strings.HasPrefix(link, "//") {
+							link = baseURL.Scheme + ":" + link
+						}
+						parsedLink, err := url.Parse(link)
+						if err == nil {
 							resolved := baseURL.ResolveReference(parsedLink)
-							canonical, parsed, err := Canonicalize(resolved.String())
-							if err == nil && !e.deduper.Seen(canonical) {
-								host := HostKey(parsed)
-								task := &Task{URL: resolved.String(), Canonical: canonical, Host: host, Depth: res.Task.Depth + 1, SourceHost: res.Task.Host, DiscoveredAt: time.Now()}
-								select {
-								case e.enqueueCh <- task:
-								default:
-									select {
-									case e.enqueueCh <- task:
-									case <-e.ctx.Done():
-										return
-									}
-								}
+							host, enqueued := e.enqueueURL(resolved.String(), res.Task.Depth+1, res.Task.Host)
+							if enqueued {
 								if res.Task.Host != host && e.telemetry != nil {
 									select {
 									case e.telemetry.EdgeEvents() <- metrics.EdgeEvent{Src: res.Task.Host, Dst: host}:

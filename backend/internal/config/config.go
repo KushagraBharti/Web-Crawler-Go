@@ -29,25 +29,42 @@ type CrawlerDefaults struct {
 }
 
 type Config struct {
-	Port          int
-	DatabaseURL   string
-	AllowedOrigin string
-	DisableDB     bool
-	Defaults      CrawlerDefaults
+	Port                 int
+	DatabaseURL          string
+	AllowedOrigins       []string
+	AllowedPreviewSuffix string
+	DisableDB            bool
+	RetentionHours       int
+	RetentionSweep       time.Duration
+	RunCreateRateLimit   int
+	RunCreateRateWindow  time.Duration
+	Defaults             CrawlerDefaults
 }
 
 func Load() Config {
+	origins := getCSV("ALLOWED_ORIGINS")
+	if len(origins) == 0 {
+		if origin := getString("ALLOWED_ORIGIN", "http://localhost:3000"); origin != "" {
+			origins = []string{origin}
+		}
+	}
+
 	cfg := Config{
-		Port:          getInt("PORT", 8080),
-		DatabaseURL:   getString("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/crawler?sslmode=disable"),
-		AllowedOrigin: getString("ALLOWED_ORIGIN", "*"),
-		DisableDB:     getBool("DISABLE_DB", false),
+		Port:                 getInt("PORT", 8080),
+		DatabaseURL:          getString("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/crawler?sslmode=disable"),
+		AllowedOrigins:       origins,
+		AllowedPreviewSuffix: getString("ALLOWED_PREVIEW_SUFFIX", ""),
+		DisableDB:            getBool("DISABLE_DB", false),
+		RetentionHours:       getInt("RETENTION_HOURS", 72),
+		RetentionSweep:       getDuration("RETENTION_SWEEP_INTERVAL", time.Hour),
+		RunCreateRateLimit:   getInt("RUN_CREATE_RATE_LIMIT", 10),
+		RunCreateRateWindow:  getDuration("RUN_CREATE_RATE_WINDOW", time.Minute),
 		Defaults: CrawlerDefaults{
 			MaxDepth:            getInt("DEFAULT_MAX_DEPTH", 3),
-			MaxPages:            getInt("DEFAULT_MAX_PAGES", 5000),
-			TimeBudget:          getDuration("DEFAULT_TIME_BUDGET", 10*time.Minute),
-			MaxLinksPerPage:     getInt("DEFAULT_MAX_LINKS_PER_PAGE", 200),
-			GlobalConcurrency:   getInt("DEFAULT_GLOBAL_CONCURRENCY", 64),
+			MaxPages:            getInt("DEFAULT_MAX_PAGES", 2000),
+			TimeBudget:          getDuration("DEFAULT_TIME_BUDGET", 5*time.Minute),
+			MaxLinksPerPage:     getInt("DEFAULT_MAX_LINKS_PER_PAGE", 100),
+			GlobalConcurrency:   getInt("DEFAULT_GLOBAL_CONCURRENCY", 32),
 			PerHostConcurrency:  getInt("DEFAULT_PER_HOST_CONCURRENCY", 4),
 			UserAgent:           getString("DEFAULT_USER_AGENT", "WebCrawler/1.0"),
 			RespectRobots:       getBool("DEFAULT_RESPECT_ROBOTS", true),
@@ -71,6 +88,23 @@ func getString(key, def string) string {
 		return val
 	}
 	return def
+}
+
+func getCSV(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func getInt(key string, def int) int {

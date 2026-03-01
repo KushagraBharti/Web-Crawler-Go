@@ -4,6 +4,39 @@
 - REST: JSON over HTTP.
 - Realtime: Server-Sent Events (SSE).
 
+## Error Schema
+All API errors follow:
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "invalid run configuration",
+    "details": {
+      "max_pages": "must be <= 2000"
+    }
+  }
+}
+```
+
+Common codes:
+- `validation_error`
+- `invalid_scheme`
+- `blocked_hostname`
+- `blocked_ip`
+- `host_resolution_failed`
+- `rate_limited`
+- `run_not_found`
+- `run_not_active`
+- `start_run_failed`
+- `stop_run_failed`
+
+## Launch Caps (Server Enforced)
+- `max_pages <= 2000`
+- `time_budget_seconds <= 300`
+- `global_concurrency <= 32`
+- `per_host_concurrency <= 4`
+- `max_links_per_page <= 100`
+
 ## Endpoints
 
 ### POST /runs
@@ -14,15 +47,20 @@ Request
 {
   "seed_url": "https://example.com",
   "max_depth": 3,
-  "max_pages": 5000,
-  "time_budget_seconds": 600,
-  "max_links_per_page": 200,
-  "global_concurrency": 64,
-  "per_host_concurrency": 4,
+  "max_pages": 1000,
+  "time_budget_seconds": 300,
+  "max_links_per_page": 100,
+  "global_concurrency": 16,
+  "per_host_concurrency": 3,
   "user_agent": "Crawler/1.0",
   "respect_robots": true
 }
 ```
+
+Notes:
+- Seed URL must be HTTP/HTTPS.
+- Localhost/internal/private/reserved targets are blocked.
+- Per-IP rate limit is applied.
 
 Response
 ```json
@@ -61,11 +99,11 @@ Response
   "started_at": "timestamp",
   "stopped_at": null,
   "storage_mode": "memory",
-  "stop_reason": "manual",
+  "stop_reason": "running",
   "limits": {
     "max_depth": 3,
-    "max_pages": 5000,
-    "time_budget_seconds": 600
+    "max_pages": 1000,
+    "time_budget_seconds": 300
   },
   "summary": {
     "pages_fetched": 1200,
@@ -75,9 +113,7 @@ Response
     "last_fetched_at": "timestamp"
   },
   "stats": {
-    "pages_fetched": 1200,
-    "pages_per_sec": 25.4,
-    "error_rate": 0.03
+    "pages_fetched": 1200
   }
 }
 ```
@@ -100,10 +136,14 @@ Event: `frame`
 }
 ```
 
+If the run is not active, returns:
+- `409 run_not_active` (with terminal status in `error.details`), or
+- `404 run_not_found`.
+
 ### GET /runs/{id}/pages
 List most recent pages collected for a run.
 
-Query
+Query:
 ```
 ?limit=50
 ```
@@ -128,8 +168,33 @@ Response
 }
 ```
 
+### GET /healthz
+Liveness endpoint.
+
+Response
+```json
+{
+  "status": "ok",
+  "time": "timestamp"
+}
+```
+
+### GET /readyz
+Readiness endpoint.
+
+Response
+```json
+{
+  "status": "ready",
+  "time": "timestamp"
+}
+```
+
+If not ready: `503` with structured error.
+
 ### GET /metrics
 Prometheus-style metrics.
 
 ### GET /debug/pprof/
 Go pprof endpoints.
+

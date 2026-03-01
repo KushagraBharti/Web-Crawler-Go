@@ -33,21 +33,22 @@ export function PersonalityCards({ hosts }: PersonalityCardsProps) {
   }, [hosts]);
 
   return (
-    <section className="panel">
+    <section className="panel" role="region" aria-labelledby="personality-heading">
       <span className="badge">Analysis</span>
-      <h3 style={{ marginTop: '1rem' }}>Notable Hosts</h3>
+      <h3 id="personality-heading" style={{ marginTop: '1rem' }}>Notable Hosts</h3>
       <p style={{ fontSize: '0.875rem', marginTop: '0.25rem' }}>
         Top 3 hosts by behavior score
       </p>
 
       <div className="personality-grid">
         {picks.length === 0 ? (
-          <div className="empty-state" style={{ gridColumn: 'span 3' }}>
-            No host data yet
+          <div className="empty-state" style={{ gridColumn: 'span 3' }} role="status">
+            <div className="skeleton skeleton--card" />
+            <p style={{ marginTop: '0.75rem' }}>Waiting for host data...</p>
           </div>
         ) : (
           picks.map(({ host, personality }) => (
-            <div className="personality-card" key={host.host}>
+            <div className="personality-card" key={host.host} role="article" aria-label={`${host.host}: ${personality.title}`}>
               <span className={`personality-card__badge ${personality.badge}`}>
                 {personality.title}
               </span>
