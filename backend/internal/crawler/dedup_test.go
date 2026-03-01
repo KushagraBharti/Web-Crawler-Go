@@ -10,7 +10,7 @@ func TestDeduperSeen(t *testing.T) {
 	if !d.Seen("a") {
 		t.Fatal("second seen should be true")
 	}
-	if d.Seen("") {
+	if !d.Seen("") {
 		t.Fatal("empty key should be treated as seen")
 	}
 }

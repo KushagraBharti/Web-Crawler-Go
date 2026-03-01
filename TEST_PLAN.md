@@ -2,24 +2,39 @@
 
 ## Unit Tests
 - URL canonicalization and normalization.
-- Dedup set behavior under concurrency.
-- Scheduler fairness and per-host limits.
-- Robots allow/disallow matching.
-- Retry and circuit breaker state transitions.
+- Dedup behavior (including empty key handling).
+- Run config validation/clamping against launch caps.
+- Target policy checks (hostname and private/reserved IP blocking).
+- Rate limiter logic (`allow`, `retry-after`, window reset).
+- Scheduler fairness and per-host limit behavior.
+- Retry and circuit-breaker transitions.
 
 ## Integration Tests
-- Redirect handling re-enqueues through gates.
-- Timeout handling and size caps with httptest servers.
-- Content-type gating for parser.
-- Queue backpressure under slow downstream.
-- SSE stream formatting and pacing.
+- `POST /runs` returns structured validation errors for capped fields.
+- `POST /runs` rate limiting returns `429` after limit.
+- Create/start/stop lifecycle with valid requests.
+- SSE stream behavior for active runs and `run_not_active` terminal cases.
 
-## End-to-End Tests
-- Start a run, crawl a small local site, and stop.
-- Verify limits: max pages, max depth, time budget.
-- Verify no memory growth in steady-state small crawl.
+## End-to-End / Manual
+- Anonymous user starts run from UI and receives live telemetry.
+- Unsafe targets are blocked with readable API + UI error messaging.
+- Dashboard transitions to terminal state after run stop/finish.
+- Run data older than retention window is pruned without removing active runs.
 
-## Performance Smoke
-- Local load test with 1k pages in a controlled server.
-- Check connection reuse rate and stable throughput.
-- Record p50 and p95 latency and compare to baseline.
+## Launch Smoke
+- 20 concurrent `POST /runs` attempts (validate stability and rate limiting).
+- 100 short runs over 1 hour (check crash-free operation).
+- Observe:
+  - API p95 latency
+  - SSE continuity/reconnect behavior
+  - memory stability (no unbounded growth)
+  - retention pruning behavior
+
+## Verification Commands
+- Backend:
+  - `cd backend && go test ./...`
+  - `cd backend && go vet ./...`
+- Frontend:
+  - `cd frontend && bun run lint`
+  - `cd frontend && bun run build`
+

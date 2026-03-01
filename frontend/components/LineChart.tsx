@@ -33,14 +33,14 @@ export function LineChart({ data, label, color }: LineChartProps) {
   }, [data]);
 
   return (
-    <div className="chart-container">
+    <div className="chart-container" role="img" aria-label={`${label} chart: current value ${currentValue.toFixed(1)}`}>
       <div className="chart-label">
         <span>{label}</span>
         {data.length > 0 && (
-          <span className="chart-label__value">{currentValue.toFixed(1)}</span>
+          <span className="chart-label__value" aria-live="polite">{currentValue.toFixed(1)}</span>
         )}
       </div>
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="chart-svg">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="chart-svg" aria-hidden="true">
         {points && (
           <>
             <polygon points={areaPoints} fill={color} fillOpacity="0.1" />

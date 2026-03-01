@@ -27,7 +27,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="grid">
+      <section className="grid" id="main-content">
         <div className="panel span-5">
           <span className="badge badge--accent">About</span>
           <h2 style={{ marginTop: '1rem' }}>How it works</h2>

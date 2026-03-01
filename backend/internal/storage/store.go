@@ -20,6 +20,7 @@ type Store interface {
 	InsertError(ctx context.Context, runID uuid.UUID, host, url, class, message string) error
 	UpsertEdge(ctx context.Context, runID uuid.UUID, src, dst string, count int) error
 	UpsertHostStat(ctx context.Context, runID uuid.UUID, host string, bucket time.Time, req, errCount, p50, p95 int, bytes int64, reuse float64) error
+	PruneRunsOlderThan(ctx context.Context, before time.Time, exclude []uuid.UUID) (int64, error)
 }
 
 type SQLStore struct {
@@ -307,6 +308,69 @@ func (s *SQLStore) UpsertHostStat(ctx context.Context, runID uuid.UUID, host str
 	ON CONFLICT (run_id, host, bucket_start) DO UPDATE SET req_count=$4, err_count=$5, p50_ms=$6, p95_ms=$7, bytes=$8, reuse_rate=$9`,
 		runID, host, bucket, req, errCount, p50, p95, bytes, reuse)
 	return err
+}
+
+func (s *SQLStore) PruneRunsOlderThan(ctx context.Context, before time.Time, exclude []uuid.UUID) (int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM runs WHERE created_at < $1 AND status <> 'running'`, before)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	excludeSet := make(map[uuid.UUID]struct{}, len(exclude))
+	for _, id := range exclude {
+		excludeSet[id] = struct{}{}
+	}
+
+	staleIDs := make([]uuid.UUID, 0, 32)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		if _, skip := excludeSet[id]; skip {
+			continue
+		}
+		staleIDs = append(staleIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(staleIDs) == 0 {
+		return 0, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	for _, runID := range staleIDs {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM host_stats WHERE run_id=$1`, runID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM edges WHERE run_id=$1`, runID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM errors WHERE run_id=$1`, runID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM pages WHERE run_id=$1`, runID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM hosts WHERE run_id=$1`, runID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM runs WHERE id=$1`, runID); err != nil {
+			return 0, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(len(staleIDs)), nil
 }
 
 func nullableString(s string) sql.NullString {

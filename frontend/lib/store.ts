@@ -16,11 +16,12 @@ type RunState = {
   edges: Edge[];
   lastUpdated?: string;
   applyFrame: (frame: Frame) => void;
+  reset: () => void;
 };
 
 export const useRunStore = create<RunState>((set, get) => {
-  const nodeSet = new Set<string>();
-  const edgeMap = new Map<string, Edge>();
+  let nodeSet = new Set<string>();
+  let edgeMap = new Map<string, Edge>();
 
   const trim = (arr: number[]) => (arr.length > SERIES_LIMIT ? arr.slice(-SERIES_LIMIT) : arr);
 
@@ -61,6 +62,21 @@ export const useRunStore = create<RunState>((set, get) => {
         edges: Array.from(edgeMap.values()),
         lastUpdated: frame.ts
       });
-    }
+    },
+    reset: () => {
+      nodeSet = new Set<string>();
+      edgeMap = new Map<string, Edge>();
+      set({
+        throughput: [],
+        frontier: [],
+        fetch: [],
+        parse: [],
+        errors: [],
+        hosts: [],
+        nodes: [],
+        edges: [],
+        lastUpdated: undefined,
+      });
+    },
   };
 });
