@@ -1,15 +1,15 @@
 # Status
 
-## Current Phase
-- Phase 2 reliability + observability complete
+## Current State
+- Result-first rewrite complete
+- Backend writes local JSON artifacts for each run
+- Frontend shows page explorer, page detail view, diagnostics, and rooted crawl tree
+- Keyword mode resolves seeds through DuckDuckGo HTML
 
-## Last Checkpoint
-- Backend crawler engine, API, metrics, and storage wired
-- Next.js UI with live SSE dashboard, personality cards, and run creation
-- Docker Compose + Dockerfiles
-
-## Blockers
-- Go toolchain not available on this machine (tests not run)
+## Verification
+- `go test ./...` passes in `backend/`
+- `bun run build` passes in `frontend/`
 
 ## Notes
-- See `blocker.md` for items needing user input.
+- `data/runs/` is gitignored and intended for local inspection
+- Postgres is no longer required for the current product shape

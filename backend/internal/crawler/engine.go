@@ -1,11 +1,9 @@
 package crawler
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -16,18 +14,25 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
-	"golang.org/x/net/html"
 	"webcrawler/internal/crawler/robots"
-	"webcrawler/internal/metrics"
-	"webcrawler/internal/storage"
 )
 
+type EngineHooks struct {
+	OnPage     func(Page)
+	OnTreeNode func(TreeNode)
+	OnTreeEdge func(TreeEdge)
+	OnSkip     func(DiagnosticEntry)
+	OnRetry    func(DiagnosticEntry)
+	OnError    func(DiagnosticEntry)
+	OnFetch    func(DiagnosticEntry)
+	OnComplete func(string)
+}
+
 type Engine struct {
-	runID     uuid.UUID
+	runID     string
 	cfg       RunConfig
-	store     storage.Store
-	telemetry *metrics.Telemetry
+	sourceURL string
+	hooks     EngineHooks
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -39,67 +44,39 @@ type Engine struct {
 
 	enqueueCh chan *Task
 	fetchCh   chan *Task
-	parseCh   chan *FetchResult
 
-	pageWrites chan storage.PageRecord
-	errorWrites chan errorRecord
-	edgeWrites  chan edgeRecord
-
-	startedAt time.Time
 	pagesFetched atomic.Int64
 	stopReasonMu sync.Mutex
 	stopReason   string
-	stopOnce sync.Once
+	stopOnce     sync.Once
 }
 
 const (
-	StopReasonManual    = "manual"
-	StopReasonMaxPages  = "max_pages"
+	StopReasonManual     = "manual"
+	StopReasonMaxPages   = "max_pages"
 	StopReasonTimeBudget = "time_budget"
-	StopReasonUnknown   = "unknown"
+	StopReasonUnknown    = "unknown"
 )
 
-type errorRecord struct {
-	runID   uuid.UUID
-	host    string
-	url     string
-	class   string
-	message string
-}
-
-type edgeRecord struct {
-	runID uuid.UUID
-	src   string
-	dst   string
-	count int
-}
-
-func NewEngine(runID uuid.UUID, cfg RunConfig, store storage.Store, telemetry *metrics.Telemetry) *Engine {
+func NewEngine(runID string, cfg RunConfig, hooks EngineHooks) *Engine {
 	cfg = cfg.Normalize()
 	if cfg.GlobalConcurrency <= 0 {
-		cfg.GlobalConcurrency = 32
+		cfg.GlobalConcurrency = 16
 	}
 	if cfg.PerHostConcurrency <= 0 {
-		cfg.PerHostConcurrency = 2
+		cfg.PerHostConcurrency = 4
 	}
 	if cfg.MaxBodyBytes <= 0 {
-		cfg.MaxBodyBytes = 1 << 20
+		cfg.MaxBodyBytes = 2 << 20
 	}
 	if cfg.RetryMax < 0 {
 		cfg.RetryMax = 0
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
 	globalSem := NewSemaphore(cfg.GlobalConcurrency)
-	frontierCap := cfg.GlobalConcurrency * 200
-	fetchCap := cfg.GlobalConcurrency * 4
-	parseCap := cfg.GlobalConcurrency * 4
-
-	enqueueCh := make(chan *Task, frontierCap)
-	fetchCh := make(chan *Task, fetchCap)
-	parseCh := make(chan *FetchResult, parseCap)
-
+	enqueueCh := make(chan *Task, cfg.GlobalConcurrency*16)
+	fetchCh := make(chan *Task, cfg.GlobalConcurrency*2)
 	client := &http.Client{
 		Transport: buildTransport(cfg),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -108,29 +85,48 @@ func NewEngine(runID uuid.UUID, cfg RunConfig, store storage.Store, telemetry *m
 	}
 
 	var robotsMgr *robots.Manager
+	var scheduler *Scheduler
 	if cfg.RespectRobots {
-		robotsMgr = robots.New(client, cfg.UserAgent, cfg.RobotsTTL, 4)
+		rm := robots.New(client, cfg.UserAgent, cfg.RobotsTTL, 4)
+		robotsMgr = rm
+		scheduler = NewScheduler(ctx, enqueueCh, fetchCh, 0, globalSem, cfg.PerHostConcurrency, cfg.CircuitTripCount, cfg.CircuitResetTime, true, rm, func(task *Task, reason string) {
+			if hooks.OnSkip != nil && task != nil {
+				hooks.OnSkip(DiagnosticEntry{
+					At:       time.Now(),
+					URL:      task.URL,
+					PageID:   task.PageID,
+					ParentID: task.ParentPageID,
+					Reason:   reason,
+				})
+			}
+		})
+	} else {
+		scheduler = NewScheduler(ctx, enqueueCh, fetchCh, 0, globalSem, cfg.PerHostConcurrency, cfg.CircuitTripCount, cfg.CircuitResetTime, false, nil, func(task *Task, reason string) {
+			if hooks.OnSkip != nil && task != nil {
+				hooks.OnSkip(DiagnosticEntry{
+					At:       time.Now(),
+					URL:      task.URL,
+					PageID:   task.PageID,
+					ParentID: task.ParentPageID,
+					Reason:   reason,
+				})
+			}
+		})
 	}
 
-	scheduler := NewScheduler(ctx, enqueueCh, fetchCh, frontierCap, globalSem, cfg.PerHostConcurrency, cfg.CircuitTripCount, cfg.CircuitResetTime, cfg.RespectRobots, robotsMgr)
-
 	return &Engine{
-		runID:      runID,
-		cfg:        cfg,
-		store:      store,
-		telemetry:  telemetry,
-		ctx:        ctx,
-		cancel:     cancel,
-		deduper:    NewDeduper(64),
-		scheduler:  scheduler,
-		robotsMgr:  robotsMgr,
-		client:     client,
-		enqueueCh:  enqueueCh,
-		fetchCh:    fetchCh,
-		parseCh:    parseCh,
-		pageWrites: make(chan storage.PageRecord, 2048),
-		errorWrites: make(chan errorRecord, 1024),
-		edgeWrites: make(chan edgeRecord, 1024),
+		runID:     runID,
+		cfg:       cfg,
+		sourceURL: cfg.SeedURL,
+		hooks:     hooks,
+		ctx:       ctx,
+		cancel:    cancel,
+		deduper:   NewDeduper(64),
+		scheduler: scheduler,
+		robotsMgr: robotsMgr,
+		client:    client,
+		enqueueCh: enqueueCh,
+		fetchCh:   fetchCh,
 	}
 }
 
@@ -153,51 +149,38 @@ func buildTransport(cfg RunConfig) *http.Transport {
 	}
 }
 
-func (e *Engine) Start(seed string) {
-	e.startedAt = time.Now()
-	if e.telemetry != nil {
-		e.telemetry.SetQueueGetter(func() (int, int, int) {
-			return e.scheduler.FrontierSize(), len(e.fetchCh), len(e.parseCh)
-		})
-		e.telemetry.SetHostGetter(func() map[string]metrics.HostSnapshot {
-			snapshot := e.scheduler.HostStatesSnapshot()
-			out := make(map[string]metrics.HostSnapshot, len(snapshot))
-			for host, hs := range snapshot {
-				out[host] = metrics.HostSnapshot{Inflight: hs.Semaphore.Inflight(), Circuit: string(hs.State())}
-			}
-			return out
-		})
-		e.telemetry.SetRobotsManager(e.robotsMgr)
-		go e.telemetry.Run(e.ctx)
-	}
-
+func (e *Engine) Start(rootPageID string) {
 	go e.scheduler.Run()
-	go e.storageLoop()
-	go e.monitorStop()
-
-	fetchWorkers := max(4, e.cfg.GlobalConcurrency)
-	parseWorkers := max(2, e.cfg.GlobalConcurrency/2)
-	for i := 0; i < fetchWorkers; i++ {
+	for i := 0; i < max(4, e.cfg.GlobalConcurrency); i++ {
 		go e.fetchLoop()
 	}
-	for i := 0; i < parseWorkers; i++ {
-		go e.parseLoop()
+	rootCanonical, parsed, err := Canonicalize(e.sourceURL)
+	if err != nil {
+		e.StopWithReason("invalid_seed")
+		return
 	}
-
-	e.enqueueURL(seed, 0, "")
+	e.deduper.Seen(rootCanonical)
+	rootNode := TreeNode{
+		ID:    rootPageID,
+		URL:   parsed.String(),
+		Title: parsed.Host,
+		Depth: 0,
+	}
+	if e.hooks.OnTreeNode != nil {
+		e.hooks.OnTreeNode(rootNode)
+	}
+	e.enqueueTask(&Task{
+		PageID:       rootPageID,
+		ParentPageID: "",
+		URL:          parsed.String(),
+		Canonical:    rootCanonical,
+		Host:         HostKey(parsed),
+		Depth:        0,
+		DiscoveredAt: time.Now(),
+	})
 	if e.cfg.TimeBudget > 0 {
 		go e.stopAfterBudget()
 	}
-}
-
-func (e *Engine) monitorStop() {
-	<-e.ctx.Done()
-	now := time.Now()
-	reason := e.StopReason()
-	if reason == "" {
-		reason = StopReasonUnknown
-	}
-	_ = e.store.UpdateRunStatus(context.Background(), e.runID, "stopped", nil, &now, &reason)
 }
 
 func (e *Engine) Stop() {
@@ -211,7 +194,18 @@ func (e *Engine) StopWithReason(reason string) {
 	e.setStopReason(reason)
 	e.stopOnce.Do(func() {
 		e.cancel()
+		if e.hooks.OnComplete != nil {
+			e.hooks.OnComplete(reason)
+		}
 	})
+}
+
+func (e *Engine) Done() <-chan struct{} {
+	return e.ctx.Done()
+}
+
+func (e *Engine) PagesFetched() int64 {
+	return e.pagesFetched.Load()
 }
 
 func (e *Engine) StopReason() string {
@@ -221,9 +215,6 @@ func (e *Engine) StopReason() string {
 }
 
 func (e *Engine) setStopReason(reason string) {
-	if reason == "" {
-		return
-	}
 	e.stopReasonMu.Lock()
 	defer e.stopReasonMu.Unlock()
 	if e.stopReason == "" {
@@ -231,46 +222,31 @@ func (e *Engine) setStopReason(reason string) {
 	}
 }
 
-func (e *Engine) PagesFetched() int64 {
-	return e.pagesFetched.Load()
-}
-
-func (e *Engine) Done() <-chan struct{} {
-	return e.ctx.Done()
-}
-
 func (e *Engine) stopAfterBudget() {
-	t := time.NewTimer(e.cfg.TimeBudget)
-	defer t.Stop()
+	timer := time.NewTimer(e.cfg.TimeBudget)
+	defer timer.Stop()
 	select {
 	case <-e.ctx.Done():
-		return
-	case <-t.C:
+	case <-timer.C:
 		e.StopWithReason(StopReasonTimeBudget)
 	}
 }
 
-func (e *Engine) enqueueURL(raw string, depth int, sourceHost string) {
-	if e.ctx.Err() != nil {
+func (e *Engine) enqueueTask(task *Task) {
+	if task == nil || e.ctx.Err() != nil {
 		return
 	}
-	canonical, parsed, err := Canonicalize(raw)
-	if err != nil {
-		return
-	}
-	if e.deduper.Seen(canonical) {
-		return
-	}
-	host := HostKey(parsed)
-	task := &Task{URL: parsed.String(), Canonical: canonical, Host: host, Depth: depth, SourceHost: sourceHost, DiscoveredAt: time.Now()}
 	select {
 	case e.enqueueCh <- task:
-		// ok
 	default:
-		// backpressure: block until space or context done
-		select {
-		case e.enqueueCh <- task:
-		case <-e.ctx.Done():
+		if e.hooks.OnSkip != nil {
+			e.hooks.OnSkip(DiagnosticEntry{
+				At:       time.Now(),
+				URL:      task.URL,
+				PageID:   task.PageID,
+				ParentID: task.ParentPageID,
+				Reason:   "enqueue_buffer_full",
+			})
 		}
 	}
 }
@@ -293,6 +269,7 @@ func (e *Engine) handleFetch(task *Task) {
 	defer task.Permit.Release()
 
 	if e.cfg.MaxPages > 0 && int(e.pagesFetched.Load()) >= e.cfg.MaxPages {
+		e.StopWithReason(StopReasonMaxPages)
 		return
 	}
 
@@ -301,7 +278,7 @@ func (e *Engine) handleFetch(task *Task) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, task.URL, nil)
 	if err != nil {
-		e.recordError(task, ErrFetch, err.Error())
+		e.recordFailure(task, 0, "", 0, 0, ErrFetch, err.Error())
 		return
 	}
 	if e.cfg.UserAgent != "" {
@@ -319,111 +296,141 @@ func (e *Engine) handleFetch(task *Task) {
 	start := time.Now()
 	resp, err := e.client.Do(req)
 	latency := time.Since(start).Milliseconds()
-
 	if err != nil {
 		class := classifyError(err)
 		if e.shouldRetry(task, class, 0) {
 			return
 		}
-		e.recordFetch(task, 0, "", nil, latency, 0, reusedConn, class, err.Error())
+		e.recordFailure(task, 0, "", latency, 0, class, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
 	status := resp.StatusCode
 	contentType := resp.Header.Get("Content-Type")
-
 	if status >= 300 && status < 400 {
-		location := resp.Header.Get("Location")
 		size, _ := drainBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
+		location := resp.Header.Get("Location")
+		e.recordFetch(task, reusedConn, status, latency, size)
 		e.handleRedirect(task, location)
-		e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, "", "")
 		return
 	}
 
 	if status == http.StatusTooManyRequests {
-		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 		size, _ := drainBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
+		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 		if e.shouldRetry(task, ErrStatus, retryAfter) {
 			return
 		}
-		e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, ErrStatus, "too_many_requests")
-		return
-	}
-
-	if status >= 500 {
-		size, _ := drainBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
-		if e.shouldRetry(task, ErrStatus, 0) {
-			return
-		}
-		e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, ErrStatus, resp.Status)
+		e.recordFailure(task, status, contentType, latency, size, ErrStatus, "too_many_requests")
 		return
 	}
 
 	if status >= 400 {
 		size, _ := drainBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
-		e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, ErrStatus, resp.Status)
+		if status >= 500 && e.shouldRetry(task, ErrStatus, 0) {
+			return
+		}
+		e.recordFailure(task, status, contentType, latency, size, ErrStatus, resp.Status)
 		return
 	}
 
-	needBody := isHTML(contentType) && (e.cfg.MaxDepth <= 0 || task.Depth < e.cfg.MaxDepth)
-	if needBody {
-		body, size, errClass := readBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
-		if errClass == ErrSizeLimit {
-			e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, ErrSizeLimit, "max_body_bytes")
-			return
-		}
-		if errClass != "" {
-			e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, ErrFetch, errClass)
-			return
-		}
-		e.recordFetch(task, status, contentType, body, latency, size, reusedConn, "", "")
-		return
-	}
-
-	size, errClass := drainBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
-	if errClass == ErrSizeLimit {
-		e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, ErrSizeLimit, "max_body_bytes")
-		return
-	}
+	body, size, errClass := readBodyLimited(resp.Body, e.cfg.MaxBodyBytes)
 	if errClass != "" {
-		e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, ErrFetch, errClass)
+		e.recordFailure(task, status, contentType, latency, size, ErrFetch, errClass)
 		return
 	}
-	e.recordFetch(task, status, contentType, nil, latency, size, reusedConn, "", "")
-}
+	e.recordFetch(task, reusedConn, status, latency, size)
 
-func (e *Engine) recordFetch(task *Task, status int, contentType string, body []byte, latency int64, size int64, reused bool, errClass, errMessage string) {
-	if errClass == "" {
-		e.pagesFetched.Add(1)
-		metrics.PagesFetched.Inc()
-	} else {
-		metrics.FetchErrors.WithLabelValues(errClass).Inc()
+	extracted := ExtractContent(mustParseURL(task.URL), body, e.cfg.MaxLinksPerPage)
+	fetchedAt := time.Now()
+	page := Page{
+		ID:            task.PageID,
+		ParentPageID:  task.ParentPageID,
+		SourceMode:    string(e.cfg.Mode),
+		SourceInput:   e.cfg.Input,
+		URL:           task.URL,
+		CanonicalURL:  task.Canonical,
+		Host:          task.Host,
+		Title:         chooseTitle(extracted.Title, task.URL),
+		Text:          extracted.Text,
+		Excerpt:       buildExcerpt(extracted.Text),
+		OutgoingLinks: extracted.Links,
+		Depth:         task.Depth,
+		StatusCode:    status,
+		ContentType:   contentType,
+		FetchMS:       latency,
+		SizeBytes:     size,
+		DiscoveredAt:  task.DiscoveredAt,
+		FetchedAt:     fetchedAt,
 	}
-
-	if e.telemetry != nil {
-		select {
-		case e.telemetry.FetchEvents() <- metrics.FetchEvent{Host: task.Host, LatencyMS: latency, Bytes: size, ReusedConn: reused, ErrClass: errClass}:
-		default:
-		}
+	e.pagesFetched.Add(1)
+	if e.hooks.OnPage != nil {
+		e.hooks.OnPage(page)
 	}
-
-	success := errClass == "" && status < 500
-	if hs := e.scheduler.HostState(task.Host); hs != nil {
-		hs.OnResult(success)
-	}
-
 	if e.cfg.MaxPages > 0 && int(e.pagesFetched.Load()) >= e.cfg.MaxPages {
 		e.StopWithReason(StopReasonMaxPages)
 	}
-
-	fetchedAt := time.Now()
-	discovered := task.DiscoveredAt
-	if discovered.IsZero() {
-		discovered = e.startedAt
+	for _, link := range extracted.Links {
+		childCanonical, parsed, err := Canonicalize(link)
+		if err != nil {
+			e.emitSkip(task, link, "invalid_link")
+			continue
+		}
+		if e.deduper.Seen(childCanonical) {
+			e.emitSkip(task, parsed.String(), "duplicate")
+			continue
+		}
+		childID := NewPageID()
+		childTask := &Task{
+			PageID:       childID,
+			ParentPageID: task.PageID,
+			URL:          parsed.String(),
+			Canonical:    childCanonical,
+			Host:         HostKey(parsed),
+			Depth:        task.Depth + 1,
+			DiscoveredAt: time.Now(),
+		}
+		if e.hooks.OnTreeNode != nil {
+			e.hooks.OnTreeNode(TreeNode{
+				ID:           childID,
+				ParentPageID: task.PageID,
+				URL:          parsed.String(),
+				Title:        parsed.Host,
+				Depth:        childTask.Depth,
+			})
+		}
+		if e.hooks.OnTreeEdge != nil {
+			e.hooks.OnTreeEdge(TreeEdge{ParentPageID: task.PageID, ChildPageID: childID})
+		}
+		e.enqueueTask(childTask)
 	}
-	rec := storage.PageRecord{
-		RunID:        e.runID,
+}
+
+func (e *Engine) recordFetch(task *Task, reused bool, status int, latency, size int64) {
+	if e.hooks.OnFetch != nil {
+		e.hooks.OnFetch(DiagnosticEntry{
+			At:     time.Now(),
+			URL:    task.URL,
+			PageID: task.PageID,
+			Reason: "fetch_complete",
+			Detail: "status=" + strconv.Itoa(status) + ",reused=" + strconv.FormatBool(reused) + ",latency_ms=" + strconv.FormatInt(latency, 10) + ",bytes=" + strconv.FormatInt(size, 10),
+		})
+	}
+	if hs := e.scheduler.HostState(task.Host); hs != nil {
+		hs.OnResult(true)
+	}
+}
+
+func (e *Engine) recordFailure(task *Task, status int, contentType string, latency, size int64, class, message string) {
+	if hs := e.scheduler.HostState(task.Host); hs != nil {
+		hs.OnResult(false)
+	}
+	page := Page{
+		ID:           task.PageID,
+		ParentPageID: task.ParentPageID,
+		SourceMode:   string(e.cfg.Mode),
+		SourceInput:  e.cfg.Input,
 		URL:          task.URL,
 		CanonicalURL: task.Canonical,
 		Host:         task.Host,
@@ -432,225 +439,113 @@ func (e *Engine) recordFetch(task *Task, status int, contentType string, body []
 		ContentType:  contentType,
 		FetchMS:      latency,
 		SizeBytes:    size,
-		ErrClass:     errClass,
-		ErrMessage:   errMessage,
-		DiscoveredAt: discovered,
-		FetchedAt:    &fetchedAt,
+		ErrorClass:   class,
+		ErrorMessage: message,
+		DiscoveredAt: task.DiscoveredAt,
+		FetchedAt:    time.Now(),
 	}
-	select {
-	case e.pageWrites <- rec:
-	default:
+	if e.hooks.OnPage != nil {
+		e.hooks.OnPage(page)
 	}
+	if e.hooks.OnError != nil {
+		e.hooks.OnError(DiagnosticEntry{
+			At:       time.Now(),
+			URL:      task.URL,
+			PageID:   task.PageID,
+			ParentID: task.ParentPageID,
+			Reason:   class,
+			Detail:   message,
+		})
+	}
+}
 
-	if errClass != "" {
-		select {
-		case e.errorWrites <- errorRecord{runID: e.runID, host: task.Host, url: task.URL, class: errClass, message: errMessage}:
-		default:
+func (e *Engine) emitSkip(parent *Task, rawURL, reason string) {
+	if e.hooks.OnSkip != nil {
+		entry := DiagnosticEntry{At: time.Now(), URL: rawURL, Reason: reason}
+		if parent != nil {
+			entry.ParentID = parent.PageID
 		}
-	}
-
-	if body != nil && isHTML(contentType) && (e.cfg.MaxDepth <= 0 || task.Depth < e.cfg.MaxDepth) {
-		select {
-		case e.parseCh <- &FetchResult{Task: task, StatusCode: status, ContentType: contentType, Body: body, FetchMS: latency, SizeBytes: size, ReusedConn: reused}:
-		default:
-			// drop parse if backpressure
-		}
+		e.hooks.OnSkip(entry)
 	}
 }
 
 func (e *Engine) handleRedirect(task *Task, location string) {
 	if location == "" {
+		e.emitSkip(task, task.URL, "redirect_without_location")
 		return
 	}
 	base, err := url.Parse(task.URL)
 	if err != nil {
+		e.emitSkip(task, task.URL, "invalid_redirect_base")
 		return
 	}
 	loc, err := url.Parse(location)
 	if err != nil {
+		e.emitSkip(task, location, "invalid_redirect_target")
 		return
 	}
 	resolved := base.ResolveReference(loc)
 	canonical, parsed, err := Canonicalize(resolved.String())
 	if err != nil {
+		e.emitSkip(task, resolved.String(), "invalid_redirect_target")
 		return
 	}
 	if e.deduper.Seen(canonical) {
+		e.emitSkip(task, parsed.String(), "duplicate_redirect_target")
 		return
 	}
-	host := HostKey(parsed)
-	task.SourceHost = task.Host
-	newTask := &Task{URL: resolved.String(), Canonical: canonical, Host: host, Depth: task.Depth, SourceHost: task.Host, DiscoveredAt: time.Now()}
-	select {
-	case e.enqueueCh <- newTask:
-	default:
-		select {
-		case e.enqueueCh <- newTask:
-		case <-e.ctx.Done():
-		}
+	redirectID := NewPageID()
+	if e.hooks.OnTreeNode != nil {
+		e.hooks.OnTreeNode(TreeNode{
+			ID:           redirectID,
+			ParentPageID: task.PageID,
+			URL:          parsed.String(),
+			Title:        parsed.Host,
+			Depth:        task.Depth,
+		})
 	}
-	if task.Host != host && e.telemetry != nil {
-		select {
-		case e.telemetry.EdgeEvents() <- metrics.EdgeEvent{Src: task.Host, Dst: host}:
-		default:
-		}
+	if e.hooks.OnTreeEdge != nil {
+		e.hooks.OnTreeEdge(TreeEdge{ParentPageID: task.PageID, ChildPageID: redirectID})
 	}
-	select {
-	case e.edgeWrites <- edgeRecord{runID: e.runID, src: task.Host, dst: host, count: 1}:
-	default:
-	}
-}
-
-func (e *Engine) parseLoop() {
-	for {
-		select {
-		case <-e.ctx.Done():
-			return
-		case res := <-e.parseCh:
-			if res == nil {
-				continue
-			}
-			e.handleParse(res)
-		}
-	}
-}
-
-func (e *Engine) handleParse(res *FetchResult) {
-	if e.cfg.MaxDepth > 0 && res.Task.Depth >= e.cfg.MaxDepth {
-		return
-	}
-	baseURL, err := url.Parse(res.Task.URL)
-	if err != nil {
-		return
-	}
-
-	tok := html.NewTokenizer(bytes.NewReader(res.Body))
-	linksFound := 0
-	for {
-		tt := tok.Next()
-		switch tt {
-		case html.ErrorToken:
-			if tok.Err() != io.EOF {
-				e.recordError(res.Task, ErrParse, tok.Err().Error())
-			}
-			return
-		case html.StartTagToken, html.SelfClosingTagToken:
-			name, hasAttr := tok.TagName()
-			if string(name) != "a" || !hasAttr {
-				continue
-			}
-			for {
-				key, val, more := tok.TagAttr()
-				if string(key) == "href" {
-					link := strings.TrimSpace(string(val))
-						if link != "" {
-							if strings.HasPrefix(link, "//") {
-								link = baseURL.Scheme + ":" + link
-							}
-							parsedLink, err := url.Parse(link)
-							if err == nil {
-							resolved := baseURL.ResolveReference(parsedLink)
-							canonical, parsed, err := Canonicalize(resolved.String())
-							if err == nil && !e.deduper.Seen(canonical) {
-								host := HostKey(parsed)
-								task := &Task{URL: resolved.String(), Canonical: canonical, Host: host, Depth: res.Task.Depth + 1, SourceHost: res.Task.Host, DiscoveredAt: time.Now()}
-								select {
-								case e.enqueueCh <- task:
-								default:
-									select {
-									case e.enqueueCh <- task:
-									case <-e.ctx.Done():
-										return
-									}
-								}
-								if res.Task.Host != host && e.telemetry != nil {
-									select {
-									case e.telemetry.EdgeEvents() <- metrics.EdgeEvent{Src: res.Task.Host, Dst: host}:
-									default:
-									}
-								}
-								select {
-								case e.edgeWrites <- edgeRecord{runID: e.runID, src: res.Task.Host, dst: host, count: 1}:
-								default:
-								}
-								linksFound++
-								if e.cfg.MaxLinksPerPage > 0 && linksFound >= e.cfg.MaxLinksPerPage {
-									return
-								}
-							}
-						}
-					}
-				}
-				if !more {
-					break
-				}
-			}
-		}
-	}
-}
-
-func (e *Engine) recordError(task *Task, class, message string) {
-	if e.telemetry != nil {
-		select {
-		case e.telemetry.FetchEvents() <- metrics.FetchEvent{Host: task.Host, ErrClass: class}:
-		default:
-		}
-	}
-	select {
-	case e.errorWrites <- errorRecord{runID: e.runID, host: task.Host, url: task.URL, class: class, message: message}:
-	default:
-	}
-}
-
-func (e *Engine) storageLoop() {
-	ctx := context.Background()
-	for {
-		select {
-		case <-e.ctx.Done():
-			return
-		case rec := <-e.pageWrites:
-			if err := e.store.InsertPage(ctx, rec); err != nil {
-				log.Printf("store page: %v", err)
-			}
-		case rec := <-e.errorWrites:
-			if err := e.store.InsertError(ctx, rec.runID, rec.host, rec.url, rec.class, rec.message); err != nil {
-				log.Printf("store error: %v", err)
-			}
-		case rec := <-e.edgeWrites:
-			if err := e.store.UpsertEdge(ctx, rec.runID, rec.src, rec.dst, rec.count); err != nil {
-				log.Printf("store edge: %v", err)
-			}
-		}
-	}
+	e.enqueueTask(&Task{
+		PageID:       redirectID,
+		ParentPageID: task.PageID,
+		URL:          parsed.String(),
+		Canonical:    canonical,
+		Host:         HostKey(parsed),
+		Depth:        task.Depth,
+		DiscoveredAt: time.Now(),
+	})
 }
 
 func (e *Engine) shouldRetry(task *Task, class string, retryAfter time.Duration) bool {
 	if task.Retries >= e.cfg.RetryMax {
 		return false
 	}
-	if class == ErrStatus || class == ErrTimeout || class == ErrTLS || class == ErrDNS || class == ErrFetch {
-		task.Retries++
-		delay := e.cfg.RetryBaseDelay * time.Duration(1<<task.Retries)
-		if retryAfter > 0 {
-			delay = retryAfter
-		}
-		if delay > 30*time.Second {
-			delay = 30 * time.Second
-		}
-		task.NotBefore = time.Now().Add(delay)
-		select {
-		case e.enqueueCh <- task:
-			return true
-		default:
-			select {
-			case e.enqueueCh <- task:
-				return true
-			case <-e.ctx.Done():
-				return false
-			}
-		}
+	if class != ErrStatus && class != ErrTimeout && class != ErrTLS && class != ErrDNS && class != ErrFetch {
+		return false
 	}
-	return false
+	task.Retries++
+	delay := e.cfg.RetryBaseDelay * time.Duration(1<<task.Retries)
+	if retryAfter > 0 {
+		delay = retryAfter
+	}
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	task.NotBefore = time.Now().Add(delay)
+	if e.hooks.OnRetry != nil {
+		e.hooks.OnRetry(DiagnosticEntry{
+			At:       time.Now(),
+			URL:      task.URL,
+			PageID:   task.PageID,
+			ParentID: task.ParentPageID,
+			Reason:   class,
+			Detail:   "retry_at=" + task.NotBefore.Format(time.RFC3339),
+		})
+	}
+	e.enqueueTask(task)
+	return true
 }
 
 func classifyError(err error) string {
@@ -658,15 +553,13 @@ func classifyError(err error) string {
 		return ErrTimeout
 	}
 	var netErr net.Error
-	if errors.As(err, &netErr) {
-		if netErr.Timeout() {
-			return ErrTimeout
-		}
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return ErrTimeout
 	}
-	if strings.Contains(err.Error(), "tls") {
+	if strings.Contains(strings.ToLower(err.Error()), "tls") {
 		return ErrTLS
 	}
-	if strings.Contains(err.Error(), "no such host") {
+	if strings.Contains(strings.ToLower(err.Error()), "no such host") {
 		return ErrDNS
 	}
 	return ErrFetch
@@ -696,11 +589,6 @@ func drainBodyLimited(r io.Reader, max int64) (int64, string) {
 	return n, ""
 }
 
-func isHTML(contentType string) bool {
-	ct := strings.ToLower(contentType)
-	return strings.HasPrefix(ct, "text/html") || strings.HasPrefix(ct, "application/xhtml+xml")
-}
-
 func parseRetryAfter(value string) time.Duration {
 	if value == "" {
 		return 0
@@ -716,6 +604,22 @@ func parseRetryAfter(value string) time.Duration {
 		return d
 	}
 	return 0
+}
+
+func chooseTitle(title, fallback string) string {
+	if strings.TrimSpace(title) != "" {
+		return strings.TrimSpace(title)
+	}
+	u, err := url.Parse(fallback)
+	if err != nil {
+		return fallback
+	}
+	return u.Host
+}
+
+func mustParseURL(raw string) *url.URL {
+	u, _ := url.Parse(raw)
+	return u
 }
 
 func max(a, b int) int {

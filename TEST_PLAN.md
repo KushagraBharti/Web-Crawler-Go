@@ -1,25 +1,28 @@
 # Test Plan
 
 ## Unit Tests
-- URL canonicalization and normalization.
-- Dedup set behavior under concurrency.
-- Scheduler fairness and per-host limits.
-- Robots allow/disallow matching.
-- Retry and circuit breaker state transitions.
+- Canonicalization and dedup behavior
+- Readable content extraction
+- Search result parsing from DuckDuckGo HTML
+- Artifact writer creates expected JSON files
+- Retry parsing and circuit-breaker transitions
 
 ## Integration Tests
-- Redirect handling re-enqueues through gates.
-- Timeout handling and size caps with httptest servers.
-- Content-type gating for parser.
-- Queue backpressure under slow downstream.
-- SSE stream formatting and pacing.
+- Local site with `A -> B -> D` and `A -> C`; verify:
+  - all pages are fetched
+  - `D` descends from `B`
+  - `C` and `D` are not directly connected
+- Keyword-mode seed resolution via mocked HTML search response
+- Bounded queue behavior records skipped URLs in diagnostics
 
-## End-to-End Tests
-- Start a run, crawl a small local site, and stop.
-- Verify limits: max pages, max depth, time budget.
-- Verify no memory growth in steady-state small crawl.
-
-## Performance Smoke
-- Local load test with 1k pages in a controlled server.
-- Check connection reuse rate and stable throughput.
-- Record p50 and p95 latency and compare to baseline.
+## Manual Verification
+1. Start backend and frontend locally.
+2. Launch a crawl from URL mode.
+3. Launch a crawl from keyword mode.
+4. Inspect:
+   - UI page list and page detail
+   - rooted tree
+   - `data/runs/<run-id>/run.json`
+   - `data/runs/<run-id>/pages.json`
+   - `data/runs/<run-id>/tree.json`
+   - `data/runs/<run-id>/diagnostics.json`

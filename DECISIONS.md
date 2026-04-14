@@ -1,22 +1,26 @@
 # Decisions
 
-This file captures defaults made during long-run autonomous work.
+## Current Defaults
+- Primary persistence: local JSON files in `data/runs/`
+- Keyword seed source: DuckDuckGo HTML
+- Graph model: rooted page-discovery tree
+- Primary run summary surface: page results, not host telemetry
+- Default crawl depth: 2
+- Default page cap: 50
+- Default time budget: 3 minutes
+- Default global concurrency: 16
+- Default per-host concurrency: 4
+- Default max links per page: 25
+- Default max body size: 2 MiB
 
-## Defaults
-- Backend port: 8080
-- Frontend port: 3000
-- Postgres port: 5432
-- Service names: backend, frontend, db
-- API base path: /
-- SSE frame rate: 5 to 10 Hz
-- State management: Zustand
-- Charts: lightweight library or custom canvas
-- Redirect depth: redirects re-enqueue at the same depth (do not increase depth)
-- Queue sizing: frontier = global concurrency * 200, fetch/parse = global concurrency * 4
-- Max body bytes default: 1 MiB
-- Personality cards: derived from host error rate, p95 latency, and inflight (client-side)
+## Deliberate Product Choices
+- Break backward compatibility to simplify the product
+- Keep concurrency, retries, robots, and politeness behavior
+- Store readable text and excerpts rather than raw HTML by default
+- Keep diagnostics available through JSON artifacts and API endpoints, but not as the main UI
 
-## Open to Change
-- Choice of chart library.
-- Exact UI layout and styling.
-- Final schema tuning once data volume is clear.
+## Open To Change
+- Search provider abstraction
+- Artifact retention and cleanup policy
+- Optional database mirror
+- Richer tree layouts and filtering

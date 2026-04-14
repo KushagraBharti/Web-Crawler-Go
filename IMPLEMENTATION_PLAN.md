@@ -1,42 +1,25 @@
 # Implementation Plan
 
-## Phase 0: Repo Skeleton
-1. Create `/backend`, `/frontend`, `/infra` directories.
-2. Add Docker Compose with Go API, Postgres, Next.js services.
-3. Add basic README updates with run commands once commands exist.
+## Completed Rewrite
+1. Replace telemetry-first API and dashboard with a result-first crawl workspace.
+2. Add keyword seed resolution via DuckDuckGo HTML.
+3. Simplify the crawler around page outputs:
+   - fetch
+   - extract readable content
+   - enqueue discovered links
+4. Persist run artifacts locally as JSON under `data/runs/<run-id>/`.
+5. Expose run, page, tree, diagnostics, list, delete, and SSE endpoints.
+6. Rebuild the frontend around:
+   - run creation
+   - page sidebar
+   - page detail
+   - rooted crawl tree
+   - diagnostics panel
+7. Rewrite docs to match the new product.
 
-## Phase 1: Steel Thread MVP
-1. Backend API skeleton with run lifecycle endpoints.
-2. In-memory scheduler with bounded queues.
-3. Shared HTTP client and tuned transport.
-4. Streaming HTML tokenization for link extraction.
-5. In-memory dedup and minimal canonicalization.
-6. Store run and page metadata in Postgres.
-7. Telemetry aggregator for SSE frames.
-8. Frontend dashboard with live charts and graph.
-
-## Phase 2: Reliability and Metrics
-1. Redirect rescheduling.
-2. Strict timeouts and size caps.
-3. Retry policy with backoff and jitter.
-4. Circuit breaker per host.
-5. httptrace metrics for connection reuse.
-6. pprof endpoints.
-
-## Phase 3: Robots and Politeness
-1. Robots cache and allow/disallow checks.
-2. Herd-proof robots fetching.
-3. Robots state visible in UI.
-
-## Phase 4: UI Polish
-1. Per-host table with sorting and filtering.
-2. Domain personality cards.
-3. Smooth canvas rendering for domain graph.
-4. Optional live tuning controls.
-
-## Deliverable Checklist
-- One command starts backend, frontend, and DB.
-- Crawl starts from UI and streams live updates.
-- Crawler stops correctly at limits or on stop.
-- Metrics and pprof are available.
-- Tests pass and failure modes are documented.
+## Next Iteration Candidates
+1. Better readable-content extraction heuristics.
+2. Pagination or virtualized page lists for larger crawls.
+3. Optional Postgres mirror for durable indexing.
+4. Richer diagnostics management endpoints.
+5. Better keyword result selection and fallback behavior.

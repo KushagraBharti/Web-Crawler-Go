@@ -1,41 +1,43 @@
 # Architecture
 
+## Core Flow
+1. User creates a run with `mode = url | keyword`.
+2. Backend resolves the seed:
+   - URL mode canonicalizes the input URL.
+   - Keyword mode fetches DuckDuckGo HTML results and selects the top result as the primary seed.
+3. The crawler starts from that seed URL.
+4. Each fetched page is converted into:
+   - title
+   - readable text
+   - excerpt
+   - outgoing links
+5. Accepted discovered pages become tree nodes with parent-child edges.
+6. The run manager writes `run.json`, `pages.json`, `tree.json`, and `diagnostics.json`.
+7. The frontend renders:
+   - run summary
+   - page list
+   - page detail view
+   - crawl tree
+   - diagnostics paths
+
 ## Components
-- API server: run lifecycle, control, and SSE.
-- Scheduler: fair selection across hosts with politeness limits.
-- Frontier: bounded queue of canonicalized URLs.
-- Fetcher: shared HTTP client, strict timeouts, size caps.
-- Parser: streaming HTML tokenizer to extract links.
-- Dedup: in-memory set for visited URLs (keyed by canonical URL).
-- Storage: Postgres for runs, pages, host stats, and graph edges.
-- Telemetry aggregator: aggregates high-frequency events into UI frames.
+- API server: run lifecycle, run snapshots, page detail, tree, diagnostics, SSE
+- Run manager: owns in-memory run state, SSE subscribers, and artifact persistence
+- Search resolver: keyword -> DuckDuckGo HTML -> primary seed URL
+- Scheduler: bounded frontier with per-host fairness and robots gating
+- Engine: fetch workers, retries, redirects, and content extraction
+- Extractor: title, readable text, excerpt, outgoing links
+- Artifact store: file-backed JSON persistence under `data/runs/<run-id>/`
+- Frontend: result-first UI for browsing pages and tree state
 
-## Data Flow
-1. Create run with seed URL and limits.
-2. Canonicalize and dedup seed; enqueue into frontier.
-3. Scheduler selects next URL based on host fairness and concurrency limits.
-4. Fetcher downloads with strict limits and records metrics.
-5. Parser extracts links and sends them back to the frontier.
-6. Store per-page metadata, update host stats, and graph edges.
-7. Telemetry aggregator emits SSE frames to the dashboard.
+## Data Model
+- Run: config, seed resolution, timestamps, status, summary, artifact paths
+- Page: stable page ID, parent page ID, URL, canonical URL, title, text, excerpt, status, timings, outgoing links
+- Tree: nodes and parent-child edges keyed by page ID
+- Diagnostics: skipped URLs, retries, errors, fetch log, seed search results
 
-## Concurrency Model
-- Bounded channels between stages.
-- Global concurrency limit to cap total inflight requests.
-- Per-host semaphore to avoid hammering a single host.
-- Scheduler enforces fairness so hot hosts do not starve others.
-
-## Redirect Handling
-- Disable automatic redirects in the HTTP client.
-- Treat `Location` as a newly discovered URL.
-- Re-enqueue redirect targets through canonicalization, dedup, robots, and politeness gates.
-
-## Failure Handling
-- Classify errors (timeout, TLS, DNS, HTTP status, size limit, parse error).
-- Retry only transient errors, with backoff and jitter.
-- Circuit breaker per host to pause failing hosts.
-
-## Observability
-- Metrics: throughput, latency, queue depths, error taxonomy.
-- httptrace for connection reuse, DNS, connect, and TLS timings.
-- pprof for CPU and heap profiling.
+## Deliberate Simplifications
+- Postgres is optional and not required for v1.
+- The graph is page-based, not host-based.
+- Diagnostics exist, but they are secondary to page results.
+- Content extraction is readable-text oriented, not raw HTML storage.

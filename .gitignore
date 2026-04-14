@@ -7,6 +7,7 @@ skills to use
 
 # Go
 backend/bin
+backend/.env*
 backend/*.exe
 backend/*.test
 backend/*.out
@@ -20,4 +21,7 @@ frontend/package-lock.json
 
 # Docker / Postgres
 infra/pgdata
+
+# Local crawl artifacts
+data/runs
 

@@ -1,43 +1,34 @@
 # Frontend Spec
 
 ## Stack
-- Next.js + TypeScript + React.
-- State: Zustand (lightweight) unless Redux is required later.
-- Charts: lightweight chart lib or custom canvas.
-- Realtime: SSE via `EventSource`.
+- Next.js App Router
+- TypeScript + React
+- No client-side charting requirement for v1
 
 ## Pages
-- `/` landing page with run creation form.
-- `/runs/[id]` live dashboard.
+- `/`
+  - URL or keyword run creation
+  - advanced crawl controls hidden behind disclosure
+- `/runs/[id]`
+  - run summary and diagnostics
+  - page list
+  - page detail reader
+  - rooted crawl tree
 
-## Run Creation Form
-Fields
-- Seed URL
-- Max depth
-- Max pages
-- Time budget (seconds)
-- Max links per page
-- Global concurrency
-- Per-host concurrency
-- Respect robots (toggle)
+## Primary UX
+- User enters a URL or keyword.
+- UI starts the run and redirects into the workspace.
+- Workspace streams new pages over SSE.
+- User clicks any page to read extracted content.
+- User can visually verify the crawl tree and copy artifact file paths for terminal inspection.
 
-Behavior
-- On submit: `POST /runs`, then `POST /runs/{id}/start`, then navigate to dashboard.
+## Visual Direction
+- Research workbench, editorial typography, warm paper palette
+- Calm and legible instead of dashboard-heavy
+- Tree view and page reading are the two primary surfaces
 
-## Dashboard Layout
-Panels
-- Throughput chart (pages/sec).
-- Queue depths chart (frontier, fetch, parse).
-- Error summary panel (top classes).
-- Per-host table (inflight, p95, error rate).
-- Domain graph (nodes = hosts, edges = discovered links).
-
-SSE Updates
-- Subscribe to `/runs/{id}/events`.
-- Apply updates at 5 to 10 Hz.
-- Use aggregated frames; avoid per-request updates.
-
-## UX Notes
-- Keep the UI responsive under high event rates.
-- Show stop button with confirmation.
-- Visualize backpressure via queue depth trends.
+## Non-Goals for v1
+- Dense telemetry panels
+- Host heatmaps
+- Personality scoring
+- Fancy graph physics

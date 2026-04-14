@@ -1,135 +1,112 @@
 # API
 
 ## Base
-- REST: JSON over HTTP.
-- Realtime: Server-Sent Events (SSE).
+- REST: JSON over HTTP
+- Realtime: SSE over `/runs/{id}/events`
 
 ## Endpoints
 
-### POST /runs
-Create a crawl run.
+### `GET /runs`
+List recent runs with their latest snapshot.
 
-Request
+### `POST /runs`
+Create a crawl run and resolve its seed.
+
+Request:
 ```json
 {
-  "seed_url": "https://example.com",
-  "max_depth": 3,
-  "max_pages": 5000,
-  "time_budget_seconds": 600,
-  "max_links_per_page": 200,
-  "global_concurrency": 64,
+  "mode": "keyword",
+  "input": "Alan Turing",
+  "max_depth": 2,
+  "max_pages": 20,
+  "time_budget_seconds": 180,
+  "max_links_per_page": 25,
+  "global_concurrency": 16,
   "per_host_concurrency": 4,
-  "user_agent": "Crawler/1.0",
   "respect_robots": true
 }
 ```
 
-Response
+Response:
 ```json
 {
-  "id": "uuid",
+  "id": "run-id",
   "status": "created",
-  "created_at": "timestamp"
+  "created_at": "timestamp",
+  "seed": {
+    "query": "Alan Turing",
+    "primary_url": "https://en.wikipedia.org/wiki/Alan_Turing",
+    "results": ["https://en.wikipedia.org/wiki/Alan_Turing"]
+  },
+  "config": {}
 }
 ```
 
-### POST /runs/{id}/start
-Start the crawl run.
+### `POST /runs/{id}/start`
+Start the crawl.
 
-Response
-```json
-{ "status": "running" }
-```
+### `POST /runs/{id}/stop`
+Stop the crawl.
 
-### POST /runs/{id}/stop
-Stop the crawl run.
+### `DELETE /runs/{id}`
+Delete a stopped run and remove its local JSON artifact directory.
 
-Response
-```json
-{ "status": "stopped" }
-```
+### `GET /runs/{id}`
+Return the full run snapshot.
 
-### GET /runs/{id}
-Fetch run status and summary stats.
+Includes:
+- run config
+- seed resolution
+- status and stop reason
+- summary
+- pages
+- tree nodes and edges
+- diagnostics
+- artifact file paths
 
-Response
+### `GET /runs/{id}/pages`
+Return the crawled pages in discovery order.
+
+### `GET /runs/{id}/pages/{pageId}`
+Return the full extracted content for a single page.
+
+### `GET /runs/{id}/tree`
+Return:
 ```json
 {
-  "id": "uuid",
-  "status": "running",
-  "created_at": "timestamp",
-  "started_at": "timestamp",
-  "stopped_at": null,
-  "storage_mode": "memory",
-  "stop_reason": "manual",
-  "limits": {
-    "max_depth": 3,
-    "max_pages": 5000,
-    "time_budget_seconds": 600
-  },
-  "summary": {
-    "pages_fetched": 1200,
-    "pages_failed": 40,
-    "unique_hosts": 180,
-    "total_bytes": 9823456,
-    "last_fetched_at": "timestamp"
-  },
-  "stats": {
-    "pages_fetched": 1200,
-    "pages_per_sec": 25.4,
-    "error_rate": 0.03
-  }
+  "nodes": [],
+  "edges": []
 }
 ```
 
-### GET /runs/{id}/events
-SSE stream of live dashboard frames.
+### `GET /runs/{id}/diagnostics`
+Return:
+- search seed data
+- skipped URLs
+- retry events
+- error events
+- fetch log
+- artifact paths
+
+### `GET /runs/{id}/events`
+SSE stream of run progress.
 
 Event: `frame`
 ```json
 {
   "ts": "timestamp",
-  "throughput": { "pages_per_sec": 25.4 },
-  "queues": { "frontier": 1200, "fetch": 64, "parse": 32 },
-  "errors": [ { "class": "timeout", "count": 12 } ],
-  "hosts": [ { "host": "example.com", "inflight": 4, "p95_ms": 900 } ],
-  "graph_delta": {
-    "nodes": ["example.com"],
-    "edges": [ ["example.com", "other.com", 3] ]
-  }
+  "status": "running",
+  "summary": {
+    "status": "running",
+    "pages_fetched": 3,
+    "pages_failed": 0,
+    "pages_queued": 4
+  },
+  "new_pages": [],
+  "tree_nodes": [],
+  "tree_edges": []
 }
 ```
 
-### GET /runs/{id}/pages
-List most recent pages collected for a run.
-
-Query
-```
-?limit=50
-```
-
-Response
-```json
-{
-  "items": [
-    {
-      "url": "https://example.com/page",
-      "host": "example.com",
-      "depth": 1,
-      "status_code": 200,
-      "content_type": "text/html",
-      "fetch_ms": 120,
-      "size_bytes": 34210,
-      "error_class": "",
-      "error_message": "",
-      "fetched_at": "timestamp"
-    }
-  ]
-}
-```
-
-### GET /metrics
-Prometheus-style metrics.
-
-### GET /debug/pprof/
-Go pprof endpoints.
+### `GET /health`
+Simple health endpoint.

@@ -2,12 +2,11 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -15,42 +14,16 @@ import (
 
 	"webcrawler/internal/api"
 	"webcrawler/internal/config"
-	"webcrawler/internal/storage"
 )
 
 func main() {
 	cfg := config.Load()
-	var store storage.Store
-	storageMode := "memory"
-	if cfg.DisableDB || cfg.DatabaseURL == "" {
-		store = storage.NewMemory()
-		log.Printf("running in memory-only mode (no database)")
-	} else {
-		db, err := sql.Open("pgx", cfg.DatabaseURL)
-		if err != nil {
-			log.Printf("db open failed (%v); falling back to memory store", err)
-			store = storage.NewMemory()
-		} else {
-			defer db.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			sqlStore := storage.NewSQL(db)
-			if err := sqlStore.Migrate(ctx); err != nil {
-				log.Printf("migrate failed (%v); falling back to memory store", err)
-				store = storage.NewMemory()
-			} else {
-				store = sqlStore
-				storageMode = "postgres"
-			}
-		}
-	}
-
-	runManager := api.NewRunManager(store, cfg.Defaults)
-	server := api.NewServer(runManager, cfg.AllowedOrigin, storageMode)
+	runManager := api.NewRunManager(cfg.Defaults, cfg.DataRoot, cfg.SearchBaseURL, cfg.SearchAPIKey)
+	server := api.NewServer(runManager, cfg.AllowedOrigin)
 
 	srv := &http.Server{
-		Addr:    ":" + itoa(cfg.Port),
-		Handler: server.Router(),
+		Addr:              ":" + itoa(cfg.Port),
+		Handler:           server.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -66,12 +39,12 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
 	log.Printf("shutdown complete")
 }
 
 func itoa(n int) string {
-	return fmt.Sprintf("%d", n)
+	return strconv.Itoa(n)
 }

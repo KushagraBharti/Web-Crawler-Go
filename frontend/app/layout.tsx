@@ -14,8 +14,8 @@ const body = DM_Sans({
 });
 
 export const metadata = {
-  title: 'Arachne — Web Crawler',
-  description: 'A web crawler with real-time observability.'
+  title: 'Arachne',
+  description: 'Result-first web crawler with readable page content and crawl tree diagnostics.'
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

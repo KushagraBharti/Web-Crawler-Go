@@ -20,6 +20,7 @@ type Scheduler struct {
 	circuitReset  time.Duration
 	respectRobots bool
 	robots        *robots.Manager
+	onDrop        func(*Task, string)
 
 	hostQueues map[string][]*Task
 	hosts      []string
@@ -29,7 +30,7 @@ type Scheduler struct {
 	mu         sync.RWMutex
 }
 
-func NewScheduler(ctx context.Context, in chan *Task, out chan *Task, frontierLimit int, global *Semaphore, perHost int, tripCount int, circuitReset time.Duration, respectRobots bool, robotsMgr *robots.Manager) *Scheduler {
+func NewScheduler(ctx context.Context, in chan *Task, out chan *Task, frontierLimit int, global *Semaphore, perHost int, tripCount int, circuitReset time.Duration, respectRobots bool, robotsMgr *robots.Manager, onDrop func(*Task, string)) *Scheduler {
 	return &Scheduler{
 		ctx:           ctx,
 		in:            in,
@@ -41,6 +42,7 @@ func NewScheduler(ctx context.Context, in chan *Task, out chan *Task, frontierLi
 		circuitReset:  circuitReset,
 		respectRobots: respectRobots,
 		robots:        robotsMgr,
+		onDrop:        onDrop,
 		hostQueues:    make(map[string][]*Task),
 		hostStates:    make(map[string]*HostState),
 	}
@@ -69,6 +71,7 @@ func (s *Scheduler) enqueue(task *Task) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.frontierLimit > 0 && s.frontierSz >= s.frontierLimit {
+		s.drop(task, "frontier_full")
 		return
 	}
 	s.frontierSz++
@@ -128,9 +131,8 @@ func (s *Scheduler) schedule() {
 			if err != nil {
 				state.Semaphore.Release()
 				s.globalSem.Release()
-				s.hostQueues[host] = s.hostQueues[host][1:]
-				s.frontierSz--
-				s.hostIndex++
+				s.dequeueCurrent(host)
+				s.drop(task, "invalid_task_url")
 				continue
 			}
 			allowed, ready, _, _ := s.robots.Allowed(s.ctx, parsed)
@@ -145,27 +147,35 @@ func (s *Scheduler) schedule() {
 			if !allowed {
 				state.Semaphore.Release()
 				s.globalSem.Release()
-				s.hostQueues[host] = s.hostQueues[host][1:]
-				s.frontierSz--
-				s.hostIndex++
+				s.dequeueCurrent(host)
+				s.drop(task, ErrRobotsDenied)
 				continue
 			}
 		}
-		// dequeue
 		s.hostQueues[host] = s.hostQueues[host][1:]
 		s.frontierSz--
 		task.Permit = &Permit{Global: s.globalSem, Host: state.Semaphore}
 		select {
 		case s.out <- task:
-			// ok
 		default:
-			// backpressure, requeue
 			task.Permit.Release()
 			task.NotBefore = time.Now().Add(200 * time.Millisecond)
 			s.hostQueues[host] = append([]*Task{task}, s.hostQueues[host]...)
 			s.frontierSz++
 		}
 		s.hostIndex++
+	}
+}
+
+func (s *Scheduler) dequeueCurrent(host string) {
+	s.hostQueues[host] = s.hostQueues[host][1:]
+	s.frontierSz--
+	s.hostIndex++
+}
+
+func (s *Scheduler) drop(task *Task, reason string) {
+	if s.onDrop != nil {
+		s.onDrop(task, reason)
 	}
 }
 
@@ -199,4 +209,3 @@ func (s *Scheduler) HostStatesSnapshot() map[string]*HostState {
 	}
 	return out
 }
- 

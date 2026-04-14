@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bufio"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -30,32 +32,36 @@ type CrawlerDefaults struct {
 
 type Config struct {
 	Port          int
-	DatabaseURL   string
 	AllowedOrigin string
-	DisableDB     bool
+	DataRoot      string
+	SearchBaseURL string
+	SearchAPIKey  string
 	Defaults      CrawlerDefaults
 }
 
 func Load() Config {
-	cfg := Config{
+	loadEnvFiles(".env", "../.env")
+
+	return Config{
 		Port:          getInt("PORT", 8080),
-		DatabaseURL:   getString("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/crawler?sslmode=disable"),
 		AllowedOrigin: getString("ALLOWED_ORIGIN", "*"),
-		DisableDB:     getBool("DISABLE_DB", false),
+		DataRoot:      getPath("DATA_ROOT", filepath.Join("..", "data", "runs")),
+		SearchBaseURL: getString("SEARCH_BASE_URL", "https://api.search.brave.com/res/v1/web/search"),
+		SearchAPIKey:  getString("BRAVE_SEARCH_API_KEY", ""),
 		Defaults: CrawlerDefaults{
-			MaxDepth:            getInt("DEFAULT_MAX_DEPTH", 3),
-			MaxPages:            getInt("DEFAULT_MAX_PAGES", 5000),
-			TimeBudget:          getDuration("DEFAULT_TIME_BUDGET", 10*time.Minute),
-			MaxLinksPerPage:     getInt("DEFAULT_MAX_LINKS_PER_PAGE", 200),
-			GlobalConcurrency:   getInt("DEFAULT_GLOBAL_CONCURRENCY", 64),
+			MaxDepth:            getInt("DEFAULT_MAX_DEPTH", 2),
+			MaxPages:            getInt("DEFAULT_MAX_PAGES", 50),
+			TimeBudget:          getDuration("DEFAULT_TIME_BUDGET", 3*time.Minute),
+			MaxLinksPerPage:     getInt("DEFAULT_MAX_LINKS_PER_PAGE", 25),
+			GlobalConcurrency:   getInt("DEFAULT_GLOBAL_CONCURRENCY", 16),
 			PerHostConcurrency:  getInt("DEFAULT_PER_HOST_CONCURRENCY", 4),
-			UserAgent:           getString("DEFAULT_USER_AGENT", "WebCrawler/1.0"),
+			UserAgent:           getString("DEFAULT_USER_AGENT", "ArachneCrawler/2.0"),
 			RespectRobots:       getBool("DEFAULT_RESPECT_ROBOTS", true),
 			RequestTimeout:      getDuration("DEFAULT_REQUEST_TIMEOUT", 15*time.Second),
 			HeaderTimeout:       getDuration("DEFAULT_HEADER_TIMEOUT", 10*time.Second),
 			TLSHandshakeTimeout: getDuration("DEFAULT_TLS_TIMEOUT", 8*time.Second),
 			IdleConnTimeout:     getDuration("DEFAULT_IDLE_CONN_TIMEOUT", 90*time.Second),
-			MaxBodyBytes:        getInt64("DEFAULT_MAX_BODY_BYTES", 1<<20),
+			MaxBodyBytes:        getInt64("DEFAULT_MAX_BODY_BYTES", 2<<20),
 			RobotsTTL:           getDuration("DEFAULT_ROBOTS_TTL", 24*time.Hour),
 			RetryMax:            getInt("DEFAULT_RETRY_MAX", 2),
 			RetryBaseDelay:      getDuration("DEFAULT_RETRY_BASE_DELAY", 300*time.Millisecond),
@@ -63,7 +69,49 @@ func Load() Config {
 			CircuitResetTime:    getDuration("DEFAULT_CIRCUIT_RESET", 30*time.Second),
 		},
 	}
-	return cfg
+}
+
+func loadEnvFiles(paths ...string) {
+	for _, path := range paths {
+		loadEnvFile(path)
+	}
+}
+
+func loadEnvFile(path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		_ = os.Setenv(key, value)
+	}
+}
+
+func getPath(key, def string) string {
+	raw := getString(key, def)
+	if filepath.IsAbs(raw) {
+		return raw
+	}
+	return filepath.Clean(raw)
 }
 
 func getString(key, def string) string {
