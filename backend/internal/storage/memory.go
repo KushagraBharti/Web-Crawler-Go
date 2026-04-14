@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,10 +13,10 @@ import (
 )
 
 type MemoryStore struct {
-	mu    sync.Mutex
-	runs  map[uuid.UUID]RunRow
-	pages []PageRecord
-	edges map[string]int
+	mu     sync.Mutex
+	runs   map[uuid.UUID]RunRow
+	pages  []PageRecord
+	edges  map[string]int
 	errors []struct {
 		runID   uuid.UUID
 		host    string
@@ -194,6 +195,62 @@ func (m *MemoryStore) UpsertEdge(ctx context.Context, runID uuid.UUID, src, dst 
 
 func (m *MemoryStore) UpsertHostStat(ctx context.Context, runID uuid.UUID, host string, bucket time.Time, req, errCount, p50, p95 int, bytes int64, reuse float64) error {
 	return nil
+}
+
+func (m *MemoryStore) PruneRunsOlderThan(ctx context.Context, before time.Time, exclude []uuid.UUID) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	excludeSet := make(map[uuid.UUID]struct{}, len(exclude))
+	for _, id := range exclude {
+		excludeSet[id] = struct{}{}
+	}
+
+	stale := make(map[uuid.UUID]struct{})
+	for id, run := range m.runs {
+		if run.CreatedAt.Before(before) && run.Status != "running" {
+			if _, skip := excludeSet[id]; skip {
+				continue
+			}
+			stale[id] = struct{}{}
+		}
+	}
+	if len(stale) == 0 {
+		return 0, nil
+	}
+
+	for id := range stale {
+		delete(m.runs, id)
+	}
+
+	filteredPages := m.pages[:0]
+	for _, page := range m.pages {
+		if _, drop := stale[page.RunID]; drop {
+			continue
+		}
+		filteredPages = append(filteredPages, page)
+	}
+	m.pages = filteredPages
+
+	filteredErrors := m.errors[:0]
+	for _, item := range m.errors {
+		if _, drop := stale[item.runID]; drop {
+			continue
+		}
+		filteredErrors = append(filteredErrors, item)
+	}
+	m.errors = filteredErrors
+
+	for key := range m.edges {
+		for runID := range stale {
+			prefix := runID.String() + ":"
+			if strings.HasPrefix(key, prefix) {
+				delete(m.edges, key)
+				break
+			}
+		}
+	}
+	return int64(len(stale)), nil
 }
 
 func sqlNullTime(t time.Time) sql.NullTime {
