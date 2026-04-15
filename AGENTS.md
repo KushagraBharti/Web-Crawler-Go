@@ -11,13 +11,15 @@ When the user explicitly asks for a long, uninterrupted build (8+ hours):
 - If you hit something that truly requires user input or credentials, record it in `blocker.md` and continue with the next best parallel task.
 
 ## Current State
-- Early development; only `README.md` and `Web-Crawler-Go_Basic_System_Ideation.jpeg` are present.
-- Do not invent structure. Align any additions with `README.md`.
+- Full implementation complete: `backend/`, `frontend/`, `infra/` all exist.
+- Backend: Go API + crawler engine + Brave Search resolver + JSON artifact store.
+- Frontend: Next.js App Router with editorial dark UI.
+- See `STATUS.md` for current build state and verification commands.
 
 ## Planned Layout (Not Yet Created)
-- `/backend` — Go API + crawler core.
-- `/frontend` — Next.js + TypeScript + React.
-- `/infra` — Docker Compose and supporting infra.
+- `/backend` — Go API + crawler core (complete).
+- `/frontend` — Next.js + TypeScript + React (complete).
+- `/infra` — Docker Compose and supporting infra (complete).
 
 ## Tooling & Commands
 - Frontend: use Bun once `/frontend` exists. Prefer `bun run <script>` from `package.json`.

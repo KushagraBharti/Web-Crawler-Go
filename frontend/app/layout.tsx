@@ -1,26 +1,34 @@
 import './globals.css';
-import { Cormorant_Garamond, DM_Sans } from 'next/font/google';
+import { Fraunces, Newsreader, Barlow_Condensed } from 'next/font/google';
 
-const display = Cormorant_Garamond({
+const fraunces = Fraunces({
   subsets: ['latin'],
   variable: '--font-display',
-  weight: ['400', '500', '600']
+  weight: ['400', '700', '900'],
+  style: ['normal'],
 });
 
-const body = DM_Sans({
+const newsreader = Newsreader({
   subsets: ['latin'],
-  variable: '--font-body',
-  weight: ['400', '500', '600']
+  variable: '--font-reading',
+  style: ['normal', 'italic'],
+  weight: ['400', '500'],
+});
+
+const barlowCondensed = Barlow_Condensed({
+  subsets: ['latin'],
+  variable: '--font-label',
+  weight: ['400', '500', '600', '700'],
 });
 
 export const metadata = {
   title: 'Arachne',
-  description: 'Result-first web crawler with readable page content and crawl tree diagnostics.'
+  description: 'Result-first web crawler with readable page content and crawl tree diagnostics.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${display.variable} ${body.variable}`}>
+    <html lang="en" className={`${fraunces.variable} ${newsreader.variable} ${barlowCondensed.variable}`}>
       <body>{children}</body>
     </html>
   );

@@ -171,6 +171,7 @@ type EventFrame struct {
 
 type Snapshot struct {
 	RunID       string            `json:"run_id"`
+	RootPageID  string            `json:"root_page_id,omitempty"`
 	Config      RunConfig         `json:"config"`
 	Seed        SearchSeed        `json:"seed"`
 	Status      string            `json:"status"`

@@ -3,23 +3,43 @@ import { RunForm } from '@/components/RunForm';
 export default function HomePage() {
   return (
     <main className="home-shell">
-      <section className="home-hero">
+      <header className="masthead anim-in">
+        <span className="masthead-title">Arachne</span>
+        <span className="masthead-meta">Result-first web crawler</span>
+      </header>
+
+      <div className="home-grid">
         <div className="home-copy">
-          <div className="eyebrow">Arachne reset</div>
-          <h1>Find a page. Read what the crawler found. Verify it in JSON.</h1>
-          <p>
-            This version strips out the noisy telemetry-first dashboard and puts crawl results
-            first. Start from a URL or keyword, inspect readable content, and watch the crawl tree
-            grow from the root.
+          <span className="home-kicker anim-in anim-in-1">Web intelligence</span>
+          <h1 className="home-headline anim-in anim-in-2">
+            The web,<br />
+            <em>read.</em>
+          </h1>
+          <p className="home-desc anim-in anim-in-3">
+            Type a URL or a search phrase. Arachne resolves the seed, crawls
+            outward, and extracts readable text from every page it discovers.
+            Browse the content, trace the discovery tree, inspect the JSON.
           </p>
-          <div className="hero-points">
-            <div><span>Seed</span><strong>URL or keyword</strong></div>
-            <div><span>Output</span><strong>Readable pages</strong></div>
-            <div><span>Verification</span><strong>Local JSON artifacts</strong></div>
+          <div className="home-features anim-in anim-in-4">
+            <div className="home-feature">
+              <span className="home-feature__label">Entry</span>
+              <span className="home-feature__val">URL or keyword</span>
+            </div>
+            <div className="home-feature">
+              <span className="home-feature__label">Output</span>
+              <span className="home-feature__val">Readable pages</span>
+            </div>
+            <div className="home-feature">
+              <span className="home-feature__label">Artifact</span>
+              <span className="home-feature__val">Local JSON</span>
+            </div>
           </div>
         </div>
-        <RunForm />
-      </section>
+
+        <div className="form-column anim-in anim-in-2">
+          <RunForm />
+        </div>
+      </div>
     </main>
   );
 }

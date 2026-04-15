@@ -1,23 +1,13 @@
 'use client';
 
-import type { FormEvent } from 'react';
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import type { FormEvent } from 'react';
 import { fetchJSON } from '@/lib/api';
 import type { SourceMode } from '@/lib/types';
 
-const defaults: {
-  mode: SourceMode;
-  input: string;
-  max_depth: number;
-  max_pages: number;
-  time_budget_seconds: number;
-  max_links_per_page: number;
-  global_concurrency: number;
-  per_host_concurrency: number;
-  respect_robots: boolean;
-} = {
-  mode: 'url',
+const defaults = {
+  mode: 'url' as SourceMode,
   input: '',
   max_depth: 2,
   max_pages: 50,
@@ -25,8 +15,8 @@ const defaults: {
   max_links_per_page: 25,
   global_concurrency: 16,
   per_host_concurrency: 4,
-  respect_robots: true
-} as const;
+  respect_robots: true,
+};
 
 export function RunForm() {
   const router = useRouter();
@@ -34,17 +24,16 @@ export function RunForm() {
   const [error, setError] = useState('');
   const [form, setForm] = useState({ ...defaults });
 
-  const update = (key: string, value: string | number | boolean) => {
+  const set = (key: string, value: string | number | boolean) =>
     setForm((prev) => ({ ...prev, [key]: value }));
-  };
 
-  const onSubmit = async (event: FormEvent) => {
-    event.preventDefault();
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
     setError('');
     try {
       const created = await fetchJSON<{ id: string }>('/runs', {
         method: 'POST',
-        body: JSON.stringify(form)
+        body: JSON.stringify(form),
       });
       await fetchJSON(`/runs/${created.id}/start`, { method: 'POST' });
       startTransition(() => router.push(`/runs/${created.id}`));
@@ -54,90 +43,143 @@ export function RunForm() {
   };
 
   return (
-    <form className="launch-card" onSubmit={onSubmit}>
-      <div className="eyebrow">Result-first crawler</div>
-      <h2>Start from a URL or a search phrase.</h2>
-      <p>
-        The crawler resolves a seed, captures readable page content, and writes JSON artifacts you
-        can inspect from the terminal.
-      </p>
+    <form onSubmit={onSubmit}>
+      <div className="form-title">Start a crawl</div>
+      <div className="form-sub">Resolves a seed then crawls outward.</div>
 
-      <div className="mode-switch">
+      <div className="mode-tabs">
         <button
-          className={form.mode === 'url' ? 'mode-switch__item active' : 'mode-switch__item'}
-          onClick={() => update('mode', 'url')}
           type="button"
+          className={`mode-tab${form.mode === 'url' ? ' active' : ''}`}
+          onClick={() => set('mode', 'url')}
         >
           URL
         </button>
         <button
-          className={form.mode === 'keyword' ? 'mode-switch__item active' : 'mode-switch__item'}
-          onClick={() => update('mode', 'keyword')}
           type="button"
+          className={`mode-tab${form.mode === 'keyword' ? ' active' : ''}`}
+          onClick={() => set('mode', 'keyword')}
         >
           Keyword
         </button>
       </div>
 
-      <label className="field">
-        <span>{form.mode === 'url' ? 'Seed URL' : 'Search query'}</span>
+      <div className="field-group">
+        <label className="field-label" htmlFor="crawl-input">
+          {form.mode === 'url' ? 'Seed URL' : 'Search query'}
+        </label>
         <input
-          className="input"
-          placeholder={form.mode === 'url' ? 'https://en.wikipedia.org/wiki/Web_crawler' : 'Alan Turing'}
+          id="crawl-input"
+          className="field-input"
           required
+          placeholder={
+            form.mode === 'url'
+              ? 'https://en.wikipedia.org/wiki/Web_crawler'
+              : 'Alan Turing'
+          }
           value={form.input}
-          onChange={(e) => update('input', e.target.value)}
+          onChange={(e) => set('input', e.target.value)}
         />
-      </label>
-
-      <div className="grid-two">
-        <label className="field">
-          <span>Max depth</span>
-          <input className="input" min={1} type="number" value={form.max_depth} onChange={(e) => update('max_depth', Number(e.target.value))} />
-        </label>
-        <label className="field">
-          <span>Max pages</span>
-          <input className="input" min={1} type="number" value={form.max_pages} onChange={(e) => update('max_pages', Number(e.target.value))} />
-        </label>
-        <label className="field">
-          <span>Time budget (sec)</span>
-          <input className="input" min={10} type="number" value={form.time_budget_seconds} onChange={(e) => update('time_budget_seconds', Number(e.target.value))} />
-        </label>
-        <label className="field">
-          <span>Links per page</span>
-          <input className="input" min={1} type="number" value={form.max_links_per_page} onChange={(e) => update('max_links_per_page', Number(e.target.value))} />
-        </label>
       </div>
 
-      <details className="advanced">
-        <summary>Advanced crawl controls</summary>
-        <div className="grid-two">
-          <label className="field">
-            <span>Global concurrency</span>
-            <input className="input" min={1} type="number" value={form.global_concurrency} onChange={(e) => update('global_concurrency', Number(e.target.value))} />
-          </label>
-          <label className="field">
-            <span>Per-host concurrency</span>
-            <input className="input" min={1} type="number" value={form.per_host_concurrency} onChange={(e) => update('per_host_concurrency', Number(e.target.value))} />
+      <div className="num-grid">
+        <div className="field-group">
+          <label className="field-label" htmlFor="max-depth">Max depth</label>
+          <input
+            id="max-depth"
+            className="field-input"
+            type="number"
+            min={1}
+            max={10}
+            value={form.max_depth}
+            onChange={(e) => set('max_depth', Number(e.target.value))}
+          />
+        </div>
+        <div className="field-group">
+          <label className="field-label" htmlFor="max-pages">Max pages</label>
+          <input
+            id="max-pages"
+            className="field-input"
+            type="number"
+            min={1}
+            value={form.max_pages}
+            onChange={(e) => set('max_pages', Number(e.target.value))}
+          />
+        </div>
+        <div className="field-group">
+          <label className="field-label" htmlFor="time-budget">Time budget (sec)</label>
+          <input
+            id="time-budget"
+            className="field-input"
+            type="number"
+            min={10}
+            value={form.time_budget_seconds}
+            onChange={(e) => set('time_budget_seconds', Number(e.target.value))}
+          />
+        </div>
+        <div className="field-group">
+          <label className="field-label" htmlFor="links-per-page">Links per page</label>
+          <input
+            id="links-per-page"
+            className="field-input"
+            type="number"
+            min={1}
+            value={form.max_links_per_page}
+            onChange={(e) => set('max_links_per_page', Number(e.target.value))}
+          />
+        </div>
+      </div>
+
+      <details className="advanced-section">
+        <summary>
+          <span className="adv-arrow">▸</span>
+          Advanced crawl controls
+        </summary>
+        <div className="advanced-inner">
+          <div className="num-grid">
+            <div className="field-group">
+              <label className="field-label" htmlFor="global-conc">Global concurrency</label>
+              <input
+                id="global-conc"
+                className="field-input"
+                type="number"
+                min={1}
+                value={form.global_concurrency}
+                onChange={(e) => set('global_concurrency', Number(e.target.value))}
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label" htmlFor="host-conc">Per-host concurrency</label>
+              <input
+                id="host-conc"
+                className="field-input"
+                type="number"
+                min={1}
+                value={form.per_host_concurrency}
+                onChange={(e) => set('per_host_concurrency', Number(e.target.value))}
+              />
+            </div>
+          </div>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={form.respect_robots}
+              onChange={(e) => set('respect_robots', e.target.checked)}
+            />
+            Respect robots.txt
           </label>
         </div>
-        <label className="checkbox">
-          <input
-            checked={form.respect_robots}
-            type="checkbox"
-            onChange={(e) => update('respect_robots', e.target.checked)}
-          />
-          <span>Respect robots.txt</span>
-        </label>
       </details>
 
-      {error ? <div className="error-banner">{error}</div> : null}
+      {error && <div className="form-error">{error}</div>}
 
-      <div className="launch-actions">
-        <button className="primary-button" disabled={pending} type="submit">
-          {pending ? 'Launching crawl...' : 'Launch crawl'}
+      <div className="form-actions">
+        <button className="btn-primary" disabled={pending} type="submit">
+          {pending ? 'Launching…' : 'Launch crawl →'}
         </button>
-        <div className="microcopy">Results page opens immediately and streams new pages as they land.</div>
+        <span className="form-note">
+          Results page opens immediately and streams new pages live.
+        </span>
       </div>
     </form>
   );

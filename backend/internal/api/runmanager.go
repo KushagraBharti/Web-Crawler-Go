@@ -456,8 +456,16 @@ func (rm *RunManager) summaryLocked(run *RunState) crawler.Summary {
 }
 
 func (rm *RunManager) snapshotLocked(run *RunState) crawler.Snapshot {
+	var rootPageID string
+	for _, id := range run.pageOrder {
+		if run.pagesByID[id].Depth == 0 {
+			rootPageID = id
+			break
+		}
+	}
 	return crawler.Snapshot{
 		RunID:       run.ID,
+		RootPageID:  rootPageID,
 		Config:      run.Config,
 		Seed:        run.Seed,
 		Status:      run.Status,

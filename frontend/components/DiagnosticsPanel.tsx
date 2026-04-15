@@ -5,50 +5,89 @@ import type { Diagnostics, RunSummary, SearchSeed } from '@/lib/types';
 export function DiagnosticsPanel({
   summary,
   seed,
-  diagnostics
+  diagnostics,
 }: {
   summary: RunSummary;
   seed: SearchSeed;
   diagnostics: Diagnostics;
 }) {
   return (
-    <details className="panel diagnostics-panel">
-      <summary className="diagnostics-summary">
-        <span className="eyebrow">Diagnostics</span>
-        <span className="diagnostics-counts">
-          {summary.pages_fetched} fetched &middot; {summary.pages_failed} failed &middot;{' '}
-          {diagnostics.errors.length} errors &middot; {diagnostics.skipped_urls.length} skipped
+    <details className="diag-panel">
+      <summary className="diag-summary">
+        <span className="diag-summary__label">Diagnostics</span>
+        <span className="diag-summary__counts">
+          {summary.pages_fetched} fetched · {summary.pages_failed} failed ·{' '}
+          {diagnostics.errors.length} errors · {diagnostics.skipped_urls.length} skipped
         </span>
       </summary>
 
-      <div className="summary-band">
-        <div><span>Queued</span><strong>{summary.pages_queued}</strong></div>
-        <div><span>Fetched</span><strong>{summary.pages_fetched}</strong></div>
-        <div><span>Failed</span><strong>{summary.pages_failed}</strong></div>
-        <div><span>Seed</span><strong>{seed.primary_url ? 'resolved' : 'pending'}</strong></div>
-      </div>
-
-      <div className="diagnostics-grid">
-        <div>
-          <h4>Artifacts</h4>
-          <p className="diagnostics-copy">{diagnostics.artifact_dir}</p>
-          <div className="artifact-list">
-            {Object.entries(diagnostics.artifact_files).map(([key, value]) => (
-              <div key={key}>
-                <span>{key}</span>
-                <code>{value}</code>
-              </div>
-            ))}
+      <div className="diag-body">
+        {/* Stats column */}
+        <div className="diag-col">
+          <span className="diag-col__title">Run stats</span>
+          <div className="diag-row">
+            <span>Fetched</span>
+            <strong>{summary.pages_fetched}</strong>
           </div>
+          <div className="diag-row">
+            <span>Failed</span>
+            <strong>{summary.pages_failed}</strong>
+          </div>
+          <div className="diag-row">
+            <span>Queued</span>
+            <strong>{summary.pages_queued}</strong>
+          </div>
+          <div className="diag-row">
+            <span>Skipped URLs</span>
+            <strong>{diagnostics.skipped_urls.length}</strong>
+          </div>
+          <div className="diag-row">
+            <span>Retries</span>
+            <strong>{diagnostics.retry_events.length}</strong>
+          </div>
+          <div className="diag-row">
+            <span>Errors</span>
+            <strong>{diagnostics.errors.length}</strong>
+          </div>
+          {seed.results.length > 0 && (
+            <div className="diag-row">
+              <span>Search results</span>
+              <strong>{seed.results.length}</strong>
+            </div>
+          )}
         </div>
-        <div>
-          <h4>Event counts</h4>
-          <div className="artifact-list">
-            <div><span>Search results</span><strong>{seed.results.length}</strong></div>
-            <div><span>Skipped URLs</span><strong>{diagnostics.skipped_urls.length}</strong></div>
-            <div><span>Retries</span><strong>{diagnostics.retry_events.length}</strong></div>
-            <div><span>Errors</span><strong>{diagnostics.errors.length}</strong></div>
-          </div>
+
+        {/* Seed column */}
+        <div className="diag-col">
+          <span className="diag-col__title">Seed</span>
+          {seed.primary_url && (
+            <div className="diag-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+              <span>Primary URL</span>
+              <strong style={{ wordBreak: 'break-all', fontSize: '0.7rem' }}>
+                {seed.primary_url}
+              </strong>
+            </div>
+          )}
+          {seed.query && (
+            <div className="diag-row">
+              <span>Query</span>
+              <strong>{seed.query}</strong>
+            </div>
+          )}
+        </div>
+
+        {/* Artifacts column */}
+        <div className="diag-col">
+          <span className="diag-col__title">Artifacts</span>
+          {diagnostics.artifact_dir && (
+            <div className="diag-path">{diagnostics.artifact_dir}</div>
+          )}
+          {Object.entries(diagnostics.artifact_files ?? {}).map(([key, value]) => (
+            <div key={key} className="diag-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+              <span>{key}</span>
+              <span className="diag-path">{value}</span>
+            </div>
+          ))}
         </div>
       </div>
     </details>

@@ -39,3 +39,7 @@ export async function getTree(runId: string) {
 export async function getDiagnostics(runId: string) {
   return fetchJSON<Diagnostics>(`/runs/${runId}/diagnostics`);
 }
+
+export async function stopRun(runId: string) {
+  return fetchJSON<{ status: string }>(`/runs/${runId}/stop`, { method: 'POST' });
+}

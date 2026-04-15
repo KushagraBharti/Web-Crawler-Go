@@ -5,39 +5,71 @@ import type { Page } from '@/lib/types';
 export function PageSidebar({
   pages,
   selectedId,
-  onSelect
+  newPageIds,
+  onSelect,
 }: {
   pages: Page[];
   selectedId?: string;
+  newPageIds: Set<string>;
   onSelect: (id: string) => void;
 }) {
   return (
-    <section className="panel sidebar-panel">
-      <div className="panel-header-block">
-        <div className="eyebrow">Pages</div>
-        <h3>Readable results</h3>
-      </div>
-      {pages.length === 0 ? (
-        <div className="empty-panel">Waiting for the first fetched page.</div>
-      ) : (
-        <div className="page-list">
-          {pages.map((page) => (
-            <button
-              className={selectedId === page.id ? 'page-list__item active' : 'page-list__item'}
-              key={page.id}
-              onClick={() => onSelect(page.id)}
-              type="button"
-            >
-              <div className="page-list__title">{page.title || page.url}</div>
-              <div className="page-list__meta">
-                <span>{page.status_code || 'ERR'}</span>
-                <span>Depth {page.depth}</span>
-              </div>
-              <p>{page.excerpt || page.error_message || 'No readable excerpt yet.'}</p>
-            </button>
-          ))}
+    <aside className="page-index">
+      <div className="page-index__head">
+        <div className="page-index__heading">Index</div>
+        <div className="page-index__count">
+          {pages.length} {pages.length === 1 ? 'page' : 'pages'}
         </div>
-      )}
-    </section>
+      </div>
+
+      <div className="page-index__list">
+        {pages.length === 0 ? (
+          <div className="page-index__empty">Waiting for first page…</div>
+        ) : (
+          pages.map((page, i) => {
+            const isActive = selectedId === page.id;
+            const isNew = newPageIds.has(page.id);
+            const hasError = Boolean(page.error_class);
+            return (
+              <button
+                key={page.id}
+                type="button"
+                className={[
+                  'page-entry',
+                  isActive ? 'active' : '',
+                  isNew ? 'page-entry--new' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onClick={() => onSelect(page.id)}
+              >
+                <div className="page-entry__row">
+                  <span className="page-entry__num">
+                    {String(i + 1).padStart(2, '0')}
+                  </span>
+                  <span className="page-entry__title">
+                    {page.title || page.url}
+                  </span>
+                </div>
+                {(page.excerpt || page.error_message) && (
+                  <div className="page-entry__excerpt">
+                    {page.excerpt || page.error_message}
+                  </div>
+                )}
+                <div className="page-entry__meta">
+                  <span className={`page-entry__tag${hasError ? ' page-entry__tag--err' : ''}`}>
+                    {hasError ? page.error_class : `${page.status_code || '—'}`}
+                  </span>
+                  <span className="page-entry__tag">D{page.depth}</span>
+                  {page.fetch_ms > 0 && (
+                    <span className="page-entry__tag">{page.fetch_ms}ms</span>
+                  )}
+                </div>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </aside>
   );
 }

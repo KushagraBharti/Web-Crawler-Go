@@ -85,6 +85,7 @@ export type Diagnostics = {
 
 export type Snapshot = {
   run_id: string;
+  root_page_id?: string;
   config: RunConfig;
   seed: SearchSeed;
   status: string;
