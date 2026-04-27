@@ -415,11 +415,123 @@ button, input, summary { font: inherit; }
 
 .btn-ghost:hover { border-color: var(--muted); color: var(--ink); }
 
+.btn-ghost--compact {
+  padding: 9px 13px;
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+}
+
 .form-note {
   font-family: var(--font-label), sans-serif;
   font-size: 0.68rem;
   color: var(--faint);
   line-height: 1.5;
+}
+
+.search-results {
+  margin-top: 20px;
+  border-top: 1px solid var(--rule-strong);
+  border-bottom: 1px solid var(--rule);
+  padding: 18px 0 4px;
+}
+
+.search-results__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.search-results__eyebrow {
+  display: block;
+  font-family: var(--font-label), sans-serif;
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+
+.search-results__title {
+  font-family: var(--font-display), serif;
+  font-size: 1.08rem;
+  line-height: 1.1;
+  color: var(--ink);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.search-results__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.search-result {
+  display: grid;
+  grid-template-columns: 16px 32px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 11px 0;
+  border-top: 1px solid var(--rule);
+  cursor: pointer;
+}
+
+.search-result input {
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.search-result__rank {
+  font-family: var(--font-label), sans-serif;
+  font-size: 0.62rem;
+  color: var(--faint);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding-top: 2px;
+}
+
+.search-result__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.search-result__label {
+  font-family: var(--font-label), sans-serif;
+  font-size: 0.58rem;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  font-weight: 700;
+}
+
+.search-result__host {
+  font-family: var(--font-display), serif;
+  font-size: 0.98rem;
+  color: var(--ink);
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.search-result__url {
+  font-family: var(--font-label), sans-serif;
+  font-size: 0.7rem;
+  color: var(--faint);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.search-result.active .search-result__rank,
+.search-result.active .search-result__label {
+  color: var(--accent);
+}
+
+.search-result__start {
+  margin-top: 2px;
+  white-space: nowrap;
 }
 
 /* ─── Workspace shell ────────────────────────────────────────── */

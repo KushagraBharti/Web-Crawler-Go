@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -29,13 +30,14 @@ type RunState struct {
 	StoppedAt  *time.Time
 	Engine     *crawler.Engine
 
-	pagesByID   map[string]crawler.Page
-	pageOrder   []string
-	treeNodes   map[string]crawler.TreeNode
-	treeEdges   []crawler.TreeEdge
-	diagnostics crawler.Diagnostics
-	subscribers map[int]chan crawler.EventFrame
-	nextSubID   int
+	pagesByID         map[string]crawler.Page
+	pageOrder         []string
+	treeNodes         map[string]crawler.TreeNode
+	treeEdges         []crawler.TreeEdge
+	prefetchedByCanon map[string]crawler.Page
+	diagnostics       crawler.Diagnostics
+	subscribers       map[int]chan crawler.EventFrame
+	nextSubID         int
 }
 
 type CreateRunInput struct {
@@ -49,6 +51,10 @@ type CreateRunInput struct {
 	PerHostConcurrency int                `json:"per_host_concurrency"`
 	UserAgent          string             `json:"user_agent"`
 	RespectRobots      *bool              `json:"respect_robots"`
+}
+
+type StartRunInput struct {
+	SeedURL string `json:"seed_url"`
 }
 
 type RunManager struct {
@@ -94,19 +100,22 @@ func (rm *RunManager) CreateRun(ctx context.Context, input CreateRunInput) (*Run
 		return nil, err
 	}
 	cfg.SeedURL = seed.PrimaryURL
+	prefetched := map[string]crawler.Page{}
 	if cfg.Mode == crawler.SourceModeKeyword {
 		log.Printf("resolved keyword seed query=%q primary=%s search_attempts=%s", cfg.Input, seed.PrimaryURL, formatSearchLog(searchLog))
+		prefetched = rm.prefetchSearchResults(ctx, cfg, seed.Results)
 	}
 
 	run := &RunState{
-		ID:          runID,
-		Config:      cfg,
-		Seed:        seed,
-		Status:      "created",
-		CreatedAt:   time.Now().UTC(),
-		pagesByID:   make(map[string]crawler.Page),
-		treeNodes:   make(map[string]crawler.TreeNode),
-		subscribers: make(map[int]chan crawler.EventFrame),
+		ID:                runID,
+		Config:            cfg,
+		Seed:              seed,
+		Status:            "created",
+		CreatedAt:         time.Now().UTC(),
+		pagesByID:         make(map[string]crawler.Page),
+		treeNodes:         make(map[string]crawler.TreeNode),
+		prefetchedByCanon: prefetched,
+		subscribers:       make(map[int]chan crawler.EventFrame),
 		diagnostics: crawler.Diagnostics{
 			SearchSeed:    &seed,
 			SearchLog:     searchLog,
@@ -127,7 +136,7 @@ func (rm *RunManager) CreateRun(ctx context.Context, input CreateRunInput) (*Run
 	return rm.cloneRun(run), nil
 }
 
-func (rm *RunManager) StartRun(ctx context.Context, runID string) error {
+func (rm *RunManager) StartRun(ctx context.Context, runID string, input StartRunInput) error {
 	rm.mu.Lock()
 	run, ok := rm.runs[runID]
 	if !ok {
@@ -138,10 +147,15 @@ func (rm *RunManager) StartRun(ctx context.Context, runID string) error {
 		rm.mu.Unlock()
 		return fmt.Errorf("run already started")
 	}
+	if err := rm.applyStartSeedLocked(run, input.SeedURL); err != nil {
+		rm.mu.Unlock()
+		return err
+	}
 	now := time.Now().UTC()
 	run.Status = "running"
 	run.StartedAt = &now
 	rootID := crawler.NewPageID()
+	prefetchedRoot := rm.prefetchedRootLocked(run, rootID)
 	engine := crawler.NewEngine(runID, run.Config, crawler.EngineHooks{
 		OnPage: func(page crawler.Page) {
 			rm.onPage(runID, page)
@@ -180,8 +194,174 @@ func (rm *RunManager) StartRun(ctx context.Context, runID string) error {
 	}
 	rm.mu.Unlock()
 
-	go engine.Start(rootID)
+	go engine.Start(rootID, prefetchedRoot)
 	return nil
+}
+
+func (rm *RunManager) applyStartSeedLocked(run *RunState, selectedURL string) error {
+	selectedURL = strings.TrimSpace(selectedURL)
+	if selectedURL == "" {
+		run.Config.SeedURL = run.Seed.PrimaryURL
+		return nil
+	}
+	canonical, _, err := crawler.Canonicalize(selectedURL)
+	if err != nil {
+		return err
+	}
+	if run.Config.Mode == crawler.SourceModeKeyword {
+		allowed := false
+		for _, result := range run.Seed.Results {
+			resultCanonical, _, err := crawler.Canonicalize(result)
+			if err == nil && resultCanonical == canonical {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("selected seed_url must be one of the keyword search results")
+		}
+	}
+	run.Config.SeedURL = canonical
+	run.Seed.PrimaryURL = canonical
+	run.diagnostics.SearchLog = append(run.diagnostics.SearchLog, crawler.DiagnosticEntry{
+		At:     time.Now().UTC(),
+		URL:    canonical,
+		Reason: "selected_seed",
+		Detail: "seed selected when starting run",
+	})
+	if run.Config.Mode == crawler.SourceModeURL {
+		run.Seed.Results = []string{canonical}
+	}
+	if run.diagnostics.SearchSeed != nil {
+		run.diagnostics.SearchSeed.PrimaryURL = canonical
+		if run.Config.Mode == crawler.SourceModeURL {
+			run.diagnostics.SearchSeed.Results = []string{canonical}
+		}
+	}
+	return nil
+}
+
+func (rm *RunManager) prefetchedRootLocked(run *RunState, rootID string) *crawler.Page {
+	if len(run.prefetchedByCanon) == 0 {
+		return nil
+	}
+	page, ok := run.prefetchedByCanon[run.Config.SeedURL]
+	if !ok {
+		return nil
+	}
+	page.ID = rootID
+	page.ParentPageID = ""
+	page.SourceMode = string(run.Config.Mode)
+	page.SourceInput = run.Config.Input
+	page.Depth = 0
+	page.DiscoveredAt = time.Now().UTC()
+	if page.FetchedAt.IsZero() {
+		page.FetchedAt = page.DiscoveredAt
+	}
+	return &page
+}
+
+func (rm *RunManager) prefetchSearchResults(ctx context.Context, cfg crawler.RunConfig, results []string) map[string]crawler.Page {
+	limit := min(len(results), 10)
+	out := make(map[string]crawler.Page, limit)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, min(limit, 5))
+	client := &http.Client{Timeout: cfg.RequestTimeout}
+
+	for _, raw := range results[:limit] {
+		canonical, parsed, err := crawler.Canonicalize(raw)
+		if err != nil {
+			continue
+		}
+		wg.Add(1)
+		go func(canonical string, url string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			page, err := prefetchPage(ctx, client, cfg, canonical, url)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			out[canonical] = page
+			mu.Unlock()
+		}(canonical, parsed.String())
+	}
+	wg.Wait()
+	return out
+}
+
+func prefetchPage(ctx context.Context, client *http.Client, cfg crawler.RunConfig, canonical string, rawURL string) (crawler.Page, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return crawler.Page{}, err
+	}
+	if cfg.UserAgent != "" {
+		req.Header.Set("User-Agent", cfg.UserAgent)
+	}
+	start := time.Now()
+	resp, err := client.Do(req)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		return crawler.Page{}, err
+	}
+	defer resp.Body.Close()
+	body, size, err := readPrefetchBody(resp.Body, cfg.MaxBodyBytes)
+	if err != nil {
+		return crawler.Page{}, err
+	}
+	parsed, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return crawler.Page{}, err
+	}
+	extracted := crawler.ExtractContent(parsed.URL, body, cfg.MaxLinksPerPage)
+	return crawler.Page{
+		URL:           rawURL,
+		CanonicalURL:  canonical,
+		Host:          crawler.HostKey(parsed.URL),
+		Title:         prefetchTitle(extracted.Title, rawURL),
+		Text:          extracted.Text,
+		Excerpt:       prefetchExcerpt(extracted.Text),
+		OutgoingLinks: extracted.Links,
+		StatusCode:    resp.StatusCode,
+		ContentType:   resp.Header.Get("Content-Type"),
+		FetchMS:       latency,
+		SizeBytes:     size,
+		FetchedAt:     time.Now().UTC(),
+	}, nil
+}
+
+func readPrefetchBody(r io.Reader, maxBytes int64) ([]byte, int64, error) {
+	if maxBytes <= 0 {
+		maxBytes = 2 << 20
+	}
+	lr := &io.LimitedReader{R: r, N: maxBytes + 1}
+	data, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, int64(len(data)), err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, int64(len(data)), fmt.Errorf("body exceeds size limit")
+	}
+	return data, int64(len(data)), nil
+}
+
+func prefetchTitle(title, fallback string) string {
+	if strings.TrimSpace(title) != "" {
+		return strings.TrimSpace(title)
+	}
+	return fallback
+}
+
+func prefetchExcerpt(text string) string {
+	clean := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if len(clean) <= 280 {
+		return clean
+	}
+	return strings.TrimSpace(clean[:280]) + "..."
 }
 
 func (rm *RunManager) StopRun(runID string) error {

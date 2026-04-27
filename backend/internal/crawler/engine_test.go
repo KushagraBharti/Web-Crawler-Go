@@ -112,7 +112,7 @@ func TestEngineBuildsTreeFromDiscoveredPages(t *testing.T) {
 	})
 
 	rootID := NewPageID()
-	engine.Start(rootID)
+	engine.Start(rootID, nil)
 
 	select {
 	case <-done:

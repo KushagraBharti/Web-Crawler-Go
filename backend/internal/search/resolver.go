@@ -150,6 +150,9 @@ func (r *Resolver) Resolve(ctx context.Context, query string) (ResultSet, error)
 		}
 	}
 	results = unique(results)
+	if len(results) > 10 {
+		results = results[:10]
+	}
 	attempt.ResultCount = len(results)
 
 	return ResultSet{

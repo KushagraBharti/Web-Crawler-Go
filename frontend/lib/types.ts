@@ -20,6 +20,14 @@ export type SearchSeed = {
   results: string[];
 };
 
+export type CreatedRun = {
+  id: string;
+  status: string;
+  created_at: string;
+  seed: SearchSeed;
+  config: RunConfig;
+};
+
 export type RunSummary = {
   status: string;
   pages_fetched: number;

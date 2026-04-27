@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -99,7 +101,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := s.runManager.StartRun(r.Context(), id); err != nil {
+	var req StartRunInput
+	if r.Body != nil && r.Body != http.NoBody {
+		if err := util.DecodeJSON(r, &req); err != nil && !errors.Is(err, io.EOF) {
+			util.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if err := s.runManager.StartRun(r.Context(), id, req); err != nil {
 		util.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

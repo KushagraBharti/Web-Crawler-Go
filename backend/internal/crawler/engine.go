@@ -149,7 +149,7 @@ func buildTransport(cfg RunConfig) *http.Transport {
 	}
 }
 
-func (e *Engine) Start(rootPageID string) {
+func (e *Engine) Start(rootPageID string, prefetchedRoot *Page) {
 	go e.scheduler.Run()
 	for i := 0; i < max(4, e.cfg.GlobalConcurrency); i++ {
 		go e.fetchLoop()
@@ -169,6 +169,13 @@ func (e *Engine) Start(rootPageID string) {
 	if e.hooks.OnTreeNode != nil {
 		e.hooks.OnTreeNode(rootNode)
 	}
+	if prefetchedRoot != nil && prefetchedRoot.CanonicalURL == rootCanonical {
+		e.emitPrefetchedRoot(rootPageID, *prefetchedRoot)
+		if e.cfg.TimeBudget > 0 {
+			go e.stopAfterBudget()
+		}
+		return
+	}
 	e.enqueueTask(&Task{
 		PageID:       rootPageID,
 		ParentPageID: "",
@@ -180,6 +187,61 @@ func (e *Engine) Start(rootPageID string) {
 	})
 	if e.cfg.TimeBudget > 0 {
 		go e.stopAfterBudget()
+	}
+}
+
+func (e *Engine) emitPrefetchedRoot(rootPageID string, page Page) {
+	now := time.Now()
+	page.ID = rootPageID
+	page.ParentPageID = ""
+	page.SourceMode = string(e.cfg.Mode)
+	page.SourceInput = e.cfg.Input
+	page.Depth = 0
+	page.DiscoveredAt = now
+	if page.FetchedAt.IsZero() {
+		page.FetchedAt = now
+	}
+	e.pagesFetched.Add(1)
+	if e.hooks.OnPage != nil {
+		e.hooks.OnPage(page)
+	}
+	if e.cfg.MaxPages > 0 && int(e.pagesFetched.Load()) >= e.cfg.MaxPages {
+		e.StopWithReason(StopReasonMaxPages)
+		return
+	}
+	for _, link := range page.OutgoingLinks {
+		childCanonical, parsed, err := Canonicalize(link)
+		if err != nil {
+			e.emitSkip(nil, link, "invalid_link")
+			continue
+		}
+		if e.deduper.Seen(childCanonical) {
+			e.emitSkip(nil, parsed.String(), "duplicate")
+			continue
+		}
+		childID := NewPageID()
+		childTask := &Task{
+			PageID:       childID,
+			ParentPageID: rootPageID,
+			URL:          parsed.String(),
+			Canonical:    childCanonical,
+			Host:         HostKey(parsed),
+			Depth:        1,
+			DiscoveredAt: time.Now(),
+		}
+		if e.hooks.OnTreeNode != nil {
+			e.hooks.OnTreeNode(TreeNode{
+				ID:           childID,
+				ParentPageID: rootPageID,
+				URL:          parsed.String(),
+				Title:        parsed.Host,
+				Depth:        childTask.Depth,
+			})
+		}
+		if e.hooks.OnTreeEdge != nil {
+			e.hooks.OnTreeEdge(TreeEdge{ParentPageID: rootPageID, ChildPageID: childID})
+		}
+		e.enqueueTask(childTask)
 	}
 }
 

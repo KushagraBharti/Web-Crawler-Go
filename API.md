@@ -45,6 +45,16 @@ Response:
 ### `POST /runs/{id}/start`
 Start the crawl.
 
+Optional request body:
+```json
+{
+  "seed_url": "https://www.britannica.com/biography/Alan-Turing"
+}
+```
+
+For keyword runs, `seed_url` must be one of the resolved search results. If
+omitted, the first search result is used.
+
 ### `POST /runs/{id}/stop`
 Stop the crawl.
 

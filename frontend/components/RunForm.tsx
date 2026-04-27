@@ -3,8 +3,8 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { FormEvent } from 'react';
-import { fetchJSON } from '@/lib/api';
-import type { SourceMode } from '@/lib/types';
+import { fetchJSON, startRun } from '@/lib/api';
+import type { CreatedRun, SourceMode } from '@/lib/types';
 
 const defaults = {
   mode: 'url' as SourceMode,
@@ -23,24 +23,59 @@ export function RunForm() {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState('');
   const [form, setForm] = useState({ ...defaults });
+  const [createdRun, setCreatedRun] = useState<CreatedRun | null>(null);
+  const [selectedSeed, setSelectedSeed] = useState('');
 
-  const set = (key: string, value: string | number | boolean) =>
+  const set = (key: string, value: string | number | boolean) => {
+    setCreatedRun(null);
+    setSelectedSeed('');
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
     try {
-      const created = await fetchJSON<{ id: string }>('/runs', {
+      const created = await fetchJSON<CreatedRun>('/runs', {
         method: 'POST',
         body: JSON.stringify(form),
       });
-      await fetchJSON(`/runs/${created.id}/start`, { method: 'POST' });
+      if (form.mode === 'keyword') {
+        const topResult = created.seed.results[0] || created.seed.primary_url;
+        setCreatedRun(created);
+        setSelectedSeed(topResult);
+        return;
+      }
+      await startRun(created.id);
       startTransition(() => router.push(`/runs/${created.id}`));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start crawl');
     }
   };
+
+  const launchSelected = async (seedUrl?: string) => {
+    if (!createdRun) {
+      return;
+    }
+    setError('');
+    const chosen = seedUrl || selectedSeed || createdRun.seed.primary_url;
+    try {
+      await startRun(createdRun.id, chosen);
+      startTransition(() => router.push(`/runs/${createdRun.id}`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start crawl');
+    }
+  };
+
+  const hostFor = (url: string) => {
+    try {
+      return new URL(url).hostname.replace(/^www\./, '');
+    } catch {
+      return url;
+    }
+  };
+
+  const resultLabel = (index: number) => (index === 0 ? 'Top result' : `Result ${index + 1}`);
 
   return (
     <form onSubmit={onSubmit}>
@@ -173,14 +208,71 @@ export function RunForm() {
 
       {error && <div className="form-error">{error}</div>}
 
-      <div className="form-actions">
-        <button className="btn-primary" disabled={pending} type="submit">
-          {pending ? 'Launching…' : 'Launch crawl →'}
-        </button>
-        <span className="form-note">
-          Results page opens immediately and streams new pages live.
-        </span>
-      </div>
+      {createdRun && (
+        <div className="search-results" aria-live="polite">
+          <div className="search-results__head">
+            <div>
+              <span className="search-results__eyebrow">Seed selection</span>
+              <div className="search-results__title">Choose where this crawl starts</div>
+            </div>
+            <button
+              className="btn-ghost btn-ghost--compact"
+              type="button"
+              disabled={pending}
+              onClick={() => launchSelected(createdRun.seed.results[0] || createdRun.seed.primary_url)}
+            >
+              Crawl top result
+            </button>
+          </div>
+          <div className="search-results__list">
+            {createdRun.seed.results.map((result, index) => (
+              <label
+                className={`search-result${selectedSeed === result ? ' active' : ''}`}
+                key={result}
+              >
+                <input
+                  checked={selectedSeed === result}
+                  name="seed-result"
+                  type="radio"
+                  value={result}
+                  onChange={() => setSelectedSeed(result)}
+                />
+                <span className="search-result__rank">{String(index + 1).padStart(2, '0')}</span>
+                <span className="search-result__body">
+                  <span className="search-result__label">{resultLabel(index)}</span>
+                  <span className="search-result__host">{hostFor(result)}</span>
+                  <span className="search-result__url">{result}</span>
+                </span>
+                <button
+                  className="btn-ghost btn-ghost--compact search-result__start"
+                  disabled={pending}
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setSelectedSeed(result);
+                    launchSelected(result);
+                  }}
+                >
+                  Start here
+                </button>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!createdRun && (
+        <div className="form-actions">
+          <button className="btn-primary" disabled={pending} type="submit">
+            {pending ? 'Working...' : form.mode === 'keyword' ? 'Search seeds' : 'Launch crawl'}
+          </button>
+          <span className="form-note">
+            {form.mode === 'keyword'
+              ? 'Keyword runs resolve and prefetch the top 10 results first.'
+              : 'Results page opens immediately and streams new pages live.'}
+          </span>
+        </div>
+      )}
     </form>
   );
 }

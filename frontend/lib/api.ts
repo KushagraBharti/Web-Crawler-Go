@@ -43,3 +43,10 @@ export async function getDiagnostics(runId: string) {
 export async function stopRun(runId: string) {
   return fetchJSON<{ status: string }>(`/runs/${runId}/stop`, { method: 'POST' });
 }
+
+export async function startRun(runId: string, seedUrl?: string) {
+  return fetchJSON<{ status: string }>(`/runs/${runId}/start`, {
+    method: 'POST',
+    body: seedUrl ? JSON.stringify({ seed_url: seedUrl }) : undefined,
+  });
+}
