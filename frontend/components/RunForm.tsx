@@ -268,7 +268,7 @@ export function RunForm() {
           </button>
           <span className="form-note">
             {form.mode === 'keyword'
-              ? 'Keyword runs resolve and prefetch the top 10 results first.'
+              ? 'Keyword runs show the top 10 results while prefetch starts in the background.'
               : 'Results page opens immediately and streams new pages live.'}
           </span>
         </div>

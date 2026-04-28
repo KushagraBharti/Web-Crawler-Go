@@ -10,7 +10,8 @@
 List recent runs with their latest snapshot.
 
 ### `POST /runs`
-Create a crawl run and resolve its seed.
+Create a crawl run and resolve its seed. Keyword runs return the top 10 search
+results immediately and begin prefetching those pages in the background.
 
 Request:
 ```json
@@ -53,7 +54,9 @@ Optional request body:
 ```
 
 For keyword runs, `seed_url` must be one of the resolved search results. If
-omitted, the first search result is used.
+omitted, the first search result is used. If the selected result has already
+finished prefetching, it is emitted as the root page immediately and the crawl
+continues from its outgoing links.
 
 ### `POST /runs/{id}/stop`
 Stop the crawl.

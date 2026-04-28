@@ -30,14 +30,15 @@ type RunState struct {
 	StoppedAt  *time.Time
 	Engine     *crawler.Engine
 
-	pagesByID         map[string]crawler.Page
-	pageOrder         []string
-	treeNodes         map[string]crawler.TreeNode
-	treeEdges         []crawler.TreeEdge
-	prefetchedByCanon map[string]crawler.Page
-	diagnostics       crawler.Diagnostics
-	subscribers       map[int]chan crawler.EventFrame
-	nextSubID         int
+	pagesByID           map[string]crawler.Page
+	pageOrder           []string
+	treeNodes           map[string]crawler.TreeNode
+	treeEdges           []crawler.TreeEdge
+	prefetchedByCanon   map[string]crawler.Page
+	prefetchWaitByCanon map[string]chan struct{}
+	diagnostics         crawler.Diagnostics
+	subscribers         map[int]chan crawler.EventFrame
+	nextSubID           int
 }
 
 type CreateRunInput struct {
@@ -100,22 +101,23 @@ func (rm *RunManager) CreateRun(ctx context.Context, input CreateRunInput) (*Run
 		return nil, err
 	}
 	cfg.SeedURL = seed.PrimaryURL
-	prefetched := map[string]crawler.Page{}
+	prefetchWait := map[string]chan struct{}{}
 	if cfg.Mode == crawler.SourceModeKeyword {
 		log.Printf("resolved keyword seed query=%q primary=%s search_attempts=%s", cfg.Input, seed.PrimaryURL, formatSearchLog(searchLog))
-		prefetched = rm.prefetchSearchResults(ctx, cfg, seed.Results)
+		prefetchWait = prefetchWaitChannels(seed.Results)
 	}
 
 	run := &RunState{
-		ID:                runID,
-		Config:            cfg,
-		Seed:              seed,
-		Status:            "created",
-		CreatedAt:         time.Now().UTC(),
-		pagesByID:         make(map[string]crawler.Page),
-		treeNodes:         make(map[string]crawler.TreeNode),
-		prefetchedByCanon: prefetched,
-		subscribers:       make(map[int]chan crawler.EventFrame),
+		ID:                  runID,
+		Config:              cfg,
+		Seed:                seed,
+		Status:              "created",
+		CreatedAt:           time.Now().UTC(),
+		pagesByID:           make(map[string]crawler.Page),
+		treeNodes:           make(map[string]crawler.TreeNode),
+		prefetchedByCanon:   make(map[string]crawler.Page),
+		prefetchWaitByCanon: prefetchWait,
+		subscribers:         make(map[int]chan crawler.EventFrame),
 		diagnostics: crawler.Diagnostics{
 			SearchSeed:    &seed,
 			SearchLog:     searchLog,
@@ -132,6 +134,9 @@ func (rm *RunManager) CreateRun(ctx context.Context, input CreateRunInput) (*Run
 	rm.mu.Unlock()
 	if err := rm.persistLocked(run); err != nil {
 		return nil, err
+	}
+	if cfg.Mode == crawler.SourceModeKeyword {
+		go rm.prefetchSearchResults(context.Background(), runID, cfg, seed.Results)
 	}
 	return rm.cloneRun(run), nil
 }
@@ -150,6 +155,27 @@ func (rm *RunManager) StartRun(ctx context.Context, runID string, input StartRun
 	if err := rm.applyStartSeedLocked(run, input.SeedURL); err != nil {
 		rm.mu.Unlock()
 		return err
+	}
+	waitCh := rm.prefetchWaitLocked(run)
+	rm.mu.Unlock()
+	if waitCh != nil {
+		select {
+		case <-waitCh:
+		case <-time.After(1200 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	rm.mu.Lock()
+	run, ok = rm.runs[runID]
+	if !ok {
+		rm.mu.Unlock()
+		return fmt.Errorf("run not found")
+	}
+	if run.Engine != nil {
+		rm.mu.Unlock()
+		return fmt.Errorf("run already started")
 	}
 	now := time.Now().UTC()
 	run.Status = "running"
@@ -261,10 +287,33 @@ func (rm *RunManager) prefetchedRootLocked(run *RunState, rootID string) *crawle
 	return &page
 }
 
-func (rm *RunManager) prefetchSearchResults(ctx context.Context, cfg crawler.RunConfig, results []string) map[string]crawler.Page {
+func (rm *RunManager) prefetchWaitLocked(run *RunState) <-chan struct{} {
+	if len(run.prefetchedByCanon) > 0 {
+		if _, ok := run.prefetchedByCanon[run.Config.SeedURL]; ok {
+			return nil
+		}
+	}
+	if run.prefetchWaitByCanon == nil {
+		return nil
+	}
+	return run.prefetchWaitByCanon[run.Config.SeedURL]
+}
+
+func prefetchWaitChannels(results []string) map[string]chan struct{} {
 	limit := min(len(results), 10)
-	out := make(map[string]crawler.Page, limit)
-	var mu sync.Mutex
+	out := make(map[string]chan struct{}, limit)
+	for _, raw := range results[:limit] {
+		canonical, _, err := crawler.Canonicalize(raw)
+		if err != nil {
+			continue
+		}
+		out[canonical] = make(chan struct{})
+	}
+	return out
+}
+
+func (rm *RunManager) prefetchSearchResults(ctx context.Context, runID string, cfg crawler.RunConfig, results []string) {
+	limit := min(len(results), 10)
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, min(limit, 5))
 	client := &http.Client{Timeout: cfg.RequestTimeout}
@@ -281,15 +330,43 @@ func (rm *RunManager) prefetchSearchResults(ctx context.Context, cfg crawler.Run
 			defer func() { <-sem }()
 			page, err := prefetchPage(ctx, client, cfg, canonical, url)
 			if err != nil {
+				rm.finishPrefetch(runID, canonical, nil, err)
 				return
 			}
-			mu.Lock()
-			out[canonical] = page
-			mu.Unlock()
+			rm.finishPrefetch(runID, canonical, &page, nil)
 		}(canonical, parsed.String())
 	}
 	wg.Wait()
-	return out
+}
+
+func (rm *RunManager) finishPrefetch(runID string, canonical string, page *crawler.Page, err error) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	run, ok := rm.runs[runID]
+	if !ok {
+		return
+	}
+	if page != nil {
+		run.prefetchedByCanon[canonical] = *page
+		run.diagnostics.SearchLog = append(run.diagnostics.SearchLog, crawler.DiagnosticEntry{
+			At:     time.Now().UTC(),
+			URL:    canonical,
+			Reason: "prefetch_complete",
+			Detail: fmt.Sprintf("status=%d,latency_ms=%d,bytes=%d", page.StatusCode, page.FetchMS, page.SizeBytes),
+		})
+	} else if err != nil {
+		run.diagnostics.SearchLog = append(run.diagnostics.SearchLog, crawler.DiagnosticEntry{
+			At:     time.Now().UTC(),
+			URL:    canonical,
+			Reason: "prefetch_failed",
+			Detail: err.Error(),
+		})
+	}
+	if ch, ok := run.prefetchWaitByCanon[canonical]; ok {
+		close(ch)
+		delete(run.prefetchWaitByCanon, canonical)
+	}
+	_ = rm.persistLocked(run)
 }
 
 func prefetchPage(ctx context.Context, client *http.Client, cfg crawler.RunConfig, canonical string, rawURL string) (crawler.Page, error) {

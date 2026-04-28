@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -156,4 +157,57 @@ func findPage(pages map[string]Page, suffix string) *Page {
 		}
 	}
 	return nil
+}
+
+func BenchmarkSyntheticCrawl501Pages(b *testing.B) {
+	const childPages = 500
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/root" {
+			_, _ = w.Write([]byte(`<html><head><title>Root</title></head><body>`))
+			for i := 0; i < childPages; i++ {
+				_, _ = fmt.Fprintf(w, `<a href="/page/%d">Page %d</a>`, i, i)
+			}
+			_, _ = w.Write([]byte(`</body></html>`))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/page/") {
+			_, _ = fmt.Fprintf(w, `<html><head><title>%s</title></head><body><p>Readable benchmark content for %s.</p></body></html>`, r.URL.Path, r.URL.Path)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	for i := 0; i < b.N; i++ {
+		done := make(chan string, 1)
+		engine := NewEngine("bench", RunConfig{
+			Mode:                SourceModeURL,
+			Input:               server.URL + "/root",
+			SeedURL:             server.URL + "/root",
+			MaxDepth:            1,
+			MaxPages:            childPages + 1,
+			MaxLinksPerPage:     childPages,
+			GlobalConcurrency:   64,
+			PerHostConcurrency:  64,
+			UserAgent:           "bench",
+			RequestTimeout:      10 * time.Second,
+			HeaderTimeout:       10 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+			IdleConnTimeout:     10 * time.Second,
+			MaxBodyBytes:        1 << 20,
+		}, EngineHooks{
+			OnComplete: func(reason string) {
+				select {
+				case done <- reason:
+				default:
+				}
+			},
+		})
+		engine.Start(NewPageID(), nil)
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			b.Fatal("benchmark crawl did not complete")
+		}
+	}
 }
